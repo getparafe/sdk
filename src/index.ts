@@ -524,15 +524,25 @@ export class ParafeClient {
 
   /**
    * Revoke an agent by ID.
-   * Requires a valid API key auth header (must belong to the same org).
+   * Uses the agent's own credential if loaded (and matches agentId), otherwise falls back to API key.
    */
   async revokeAgent(agentId: string): Promise<RevokeAgentResult> {
+    // Prefer credential auth when the loaded credential matches this agent
+    const headers: Record<string, string> = {};
+    if (this.credentials?.agentId === agentId && this.credentials.credential) {
+      headers.Authorization = `Bearer ${this.credentials.credential}`;
+    } else {
+      headers.Authorization = `Bearer ${this.apiKey}`;
+    }
+
     const raw = await request<{
       agent_id: string;
       status: string;
       revoked_at: string;
     }>(`${this.brokerUrl}/agents/${agentId}/revoke`, {
-      ...this.httpOpts,
+      timeout: this.timeout,
+      retries: this.retries,
+      headers,
       method: 'POST',
     });
 
