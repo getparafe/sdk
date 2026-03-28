@@ -192,41 +192,60 @@ export interface RecordActionResult {
 // ── closeSession() ──
 
 export interface ReceiptParticipant {
-  agent_id: string;
-  agent_name: string;
-  identity_assurance: string;
+  agentId: string;
+  agentName: string;
+  identityAssurance: string;
 }
 
 export interface ReceiptConsentToken {
   scope: string;
   permissions: string[];
-  authorization: { modality: string; evidence: unknown };
-  issued_at: string;
-  expired_at: string;
+  authorization: Authorization;
+  issuedAt: string;
+  expiredAt: string;
 }
 
 export interface SessionReceipt {
-  receipt_id: string;
-  session_id: string;
-  handshake_id: string;
+  receiptId: string;
+  sessionId: string;
+  handshakeId: string;
   participants: {
     initiator: ReceiptParticipant;
     target: ReceiptParticipant;
   };
   handshake: {
-    handshake_id: string;
-    mutual_auth_completed: boolean;
-    completed_at: string;
+    handshakeId: string;
+    mutualAuthCompleted: boolean;
+    completedAt: string;
   };
-  consent_tokens: ReceiptConsentToken[];
+  consentTokens: ReceiptConsentToken[];
   session: {
-    started_at: string;
-    closed_at: string;
+    startedAt: string;
+    closedAt: string;
     status: string;
   };
-  signed_by: string;
-  issued_at: string;
+  signedBy: string;
+  issuedAt: string;
   signature: string;
+}
+
+// ── verifyConsentLocally() ──
+
+export interface VerifyConsentLocalResult {
+  valid: boolean;
+  scope: string;
+  permissions: string[];
+  exclusions: string[];
+  sessionId: string;
+  expiresAt: string;
+  expired: boolean;
+}
+
+// ── getPublicKey() ──
+
+export interface BrokerPublicKey {
+  publicKey: string;
+  algorithm: string;
 }
 
 // ── verifyReceipt() ──

@@ -1,11 +1,11 @@
 /**
  * HTTP fetch wrapper with retry logic for @parafe-trust/sdk
  *
- * Retries on 5xx responses and network errors with exponential backoff.
- * Does NOT retry 4xx responses (client errors).
+ * Retries on 502/503/504 responses and network errors with exponential backoff.
+ * Does NOT retry 4xx or 500 responses.
  */
 
-import { mapBrokerError } from './errors.js';
+import { mapBrokerError, InternalError } from './errors.js';
 
 export interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
@@ -22,8 +22,9 @@ function sleep(ms: number): Promise<void> {
 /**
  * Perform an HTTP request against the broker with retry logic.
  *
- * On 5xx or network error: retry up to `options.retries` times with
+ * On 502/503/504 or network error: retry up to `options.retries` times with
  * exponential backoff (200ms, 400ms, 800ms, ...).
+ * On 500: throw immediately (server bug, unlikely to self-resolve).
  *
  * On 4xx: throw immediately with the appropriate typed error.
  */
@@ -78,8 +79,8 @@ export async function request<T>(
       throw mapBrokerError(response.status, body);
     }
 
-    // 5xx: retry
-    if (response.status >= 500) {
+    // 502/503/504: transient gateway errors — retry
+    if (response.status >= 502 && response.status <= 504) {
       let body: Record<string, unknown> = {};
       try {
         body = (await response.json()) as Record<string, unknown>;
@@ -90,9 +91,20 @@ export async function request<T>(
       continue;
     }
 
+    // 500 or other 5xx: server bug, unlikely to self-resolve — throw immediately
+    if (response.status >= 500) {
+      let body: Record<string, unknown> = {};
+      try {
+        body = (await response.json()) as Record<string, unknown>;
+      } catch {
+        // ignore JSON parse error
+      }
+      throw mapBrokerError(response.status, body);
+    }
+
     // 2xx/3xx: success
     const text = await response.text();
-    if (!text) return undefined as unknown as T;
+    if (!text) throw new InternalError('Empty response body from broker');
 
     try {
       return JSON.parse(text) as T;

@@ -28,5 +28,4 @@ jobs:
       - name: Run tests
         env:
           PARAFE_TEST_BROKER_URL: ${{ secrets.STAGING_BROKER_URL }}
-          PARAFE_TEST_API_KEY: ${{ secrets.STAGING_SDK_API_KEY }}
         run: npm test

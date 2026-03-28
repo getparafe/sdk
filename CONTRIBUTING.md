@@ -20,10 +20,13 @@ Unit tests run without any external dependencies:
 npm run test:unit
 ```
 
-Integration tests require a running Parafe broker:
+Integration tests require a running Parafe broker (no API key needed — tests bootstrap their own):
 
 ```bash
-PARAFE_TEST_BROKER_URL=http://localhost:3000 PARAFE_TEST_API_KEY=your-key npm run test:integration
+npm run test:integration
+
+# Or point at a specific broker URL
+PARAFE_TEST_BROKER_URL=http://localhost:3000 npm run test:integration
 ```
 
 ## Pull Requests

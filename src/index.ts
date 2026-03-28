@@ -14,6 +14,7 @@ import { generateKeyPair, signChallenge } from './crypto.js';
 import { encryptCredentials, decryptCredentials } from './credentials.js';
 import { request } from './http.js';
 import { ValidationError } from './errors.js';
+import * as jose from 'jose';
 import type {
   ParafeClientOptions,
   Authorization,
@@ -39,6 +40,8 @@ import type {
   RevokeAgentResult,
   RenewCredentialResult,
   UpdateScopePoliciesResult,
+  VerifyConsentLocalResult,
+  BrokerPublicKey,
 } from './types.js';
 
 // Re-export everything consumers need
@@ -111,6 +114,93 @@ const authorization = {
   },
 };
 
+// ─── Receipt normalization helpers ────────────────────────────────────────────
+
+function normalizeParticipant(raw: Record<string, unknown>): import('./types.js').ReceiptParticipant {
+  return {
+    agentId: raw.agent_id as string,
+    agentName: raw.agent_name as string,
+    identityAssurance: raw.identity_assurance as string,
+  };
+}
+
+function normalizeReceipt(raw: Record<string, unknown>): SessionReceipt {
+  const participants = raw.participants as Record<string, Record<string, unknown>>;
+  const handshake = raw.handshake as Record<string, unknown>;
+  const session = raw.session as Record<string, unknown>;
+  const consentTokens = (raw.consent_tokens as Record<string, unknown>[]) ?? [];
+
+  return {
+    receiptId: raw.receipt_id as string,
+    sessionId: raw.session_id as string,
+    handshakeId: raw.handshake_id as string,
+    participants: {
+      initiator: normalizeParticipant(participants.initiator),
+      target: normalizeParticipant(participants.target),
+    },
+    handshake: {
+      handshakeId: handshake.handshake_id as string,
+      mutualAuthCompleted: handshake.mutual_auth_completed as boolean,
+      completedAt: handshake.completed_at as string,
+    },
+    consentTokens: consentTokens.map(ct => ({
+      scope: ct.scope as string,
+      permissions: ct.permissions as string[],
+      authorization: ct.authorization as Authorization,
+      issuedAt: ct.issued_at as string,
+      expiredAt: ct.expired_at as string,
+    })),
+    session: {
+      startedAt: session.started_at as string,
+      closedAt: session.closed_at as string,
+      status: session.status as string,
+    },
+    signedBy: raw.signed_by as string,
+    issuedAt: raw.issued_at as string,
+    signature: raw.signature as string,
+  };
+}
+
+function denormalizeReceipt(receipt: SessionReceipt): Record<string, unknown> {
+  return {
+    receipt_id: receipt.receiptId,
+    session_id: receipt.sessionId,
+    handshake_id: receipt.handshakeId,
+    participants: {
+      initiator: {
+        agent_id: receipt.participants.initiator.agentId,
+        agent_name: receipt.participants.initiator.agentName,
+        identity_assurance: receipt.participants.initiator.identityAssurance,
+      },
+      target: {
+        agent_id: receipt.participants.target.agentId,
+        agent_name: receipt.participants.target.agentName,
+        identity_assurance: receipt.participants.target.identityAssurance,
+      },
+    },
+    handshake: {
+      handshake_id: receipt.handshake.handshakeId,
+      mutual_auth_completed: receipt.handshake.mutualAuthCompleted,
+      completed_at: receipt.handshake.completedAt,
+    },
+    consent_tokens: receipt.consentTokens.map(ct => ({
+      scope: ct.scope,
+      permissions: ct.permissions,
+      authorization: ct.authorization,
+      issued_at: ct.issuedAt,
+      expired_at: ct.expiredAt,
+    })),
+    session: {
+      started_at: receipt.session.startedAt,
+      closed_at: receipt.session.closedAt,
+      status: receipt.session.status,
+    },
+    signed_by: receipt.signedBy,
+    issued_at: receipt.issuedAt,
+    signature: receipt.signature,
+  };
+}
+
 // ─── ParafeClient ─────────────────────────────────────────────────────────────
 
 export class ParafeClient {
@@ -159,6 +249,9 @@ export class ParafeClient {
   /**
    * Generate an Ed25519 key pair, register a new agent with the broker,
    * and store the returned credentials in memory.
+   *
+   * **Important:** The returned `privateKey` is the only copy — the broker does not store it.
+   * Call `saveCredentials()` immediately after registration to persist it securely.
    */
   async register(opts: RegisterOptions): Promise<RegisterResult> {
     const { name, type, owner, scopePolicies } = opts;
@@ -253,6 +346,9 @@ export class ParafeClient {
   /**
    * Export the raw key material from in-memory credentials.
    * Throws ValidationError if no credentials are loaded.
+   *
+   * **Warning:** The returned `privateKey` is sensitive material. Avoid logging it
+   * or storing it in plaintext. Use `saveCredentials()` for encrypted persistence.
    */
   exportKeys(): ExportedKeys {
     const creds = this.requireCredentials();
@@ -447,6 +543,65 @@ export class ParafeClient {
     };
   }
 
+  // ── Local consent verification ──────────────────────────────────────────────
+
+  /**
+   * Verify a consent token locally without a broker round-trip.
+   * Decodes the JWT, verifies the Ed25519 signature against the broker's public key,
+   * and checks expiration, scope, and permissions.
+   *
+   * Requires the broker's public key (fetch once via `getPublicKey()` and cache it).
+   */
+  async verifyConsentLocally(
+    consentToken: string,
+    brokerPublicKeyBase64: string
+  ): Promise<VerifyConsentLocalResult> {
+    const spkiDer = Buffer.from(brokerPublicKeyBase64, 'base64');
+    const publicKey = await jose.importSPKI(
+      `-----BEGIN PUBLIC KEY-----\n${spkiDer.toString('base64')}\n-----END PUBLIC KEY-----`,
+      'EdDSA'
+    );
+
+    const { payload } = await jose.jwtVerify(consentToken, publicKey, {
+      algorithms: ['EdDSA'],
+    });
+
+    const now = new Date();
+    const expiresAt = payload.exp ? new Date(payload.exp * 1000).toISOString() : '';
+    const expired = payload.exp ? now.getTime() > payload.exp * 1000 : false;
+
+    return {
+      valid: !expired,
+      scope: (payload.scope as string) ?? '',
+      permissions: (payload.permissions as string[]) ?? [],
+      exclusions: (payload.exclusions as string[]) ?? [],
+      sessionId: (payload.session_id as string) ?? '',
+      expiresAt,
+      expired,
+    };
+  }
+
+  // ── Broker public key ──────────────────────────────────────────────────────
+
+  /**
+   * Fetch the broker's Ed25519 public key for local consent token verification.
+   * Cache the result — the broker's key pair does not change frequently.
+   */
+  async getPublicKey(): Promise<BrokerPublicKey> {
+    const raw = await request<{
+      public_key: string;
+      algorithm: string;
+    }>(`${this.brokerUrl}/public-key`, {
+      ...this.httpOpts,
+      method: 'GET',
+    });
+
+    return {
+      publicKey: raw.public_key,
+      algorithm: raw.algorithm,
+    };
+  }
+
   // ── Interaction recording ────────────────────────────────────────────────────
 
   /**
@@ -488,11 +643,13 @@ export class ParafeClient {
    * Close an active session and receive the signed interaction receipt.
    */
   async closeSession(sessionId: string): Promise<SessionReceipt> {
-    return request<SessionReceipt>(`${this.brokerUrl}/session/close`, {
+    const raw = await request<Record<string, unknown>>(`${this.brokerUrl}/session/close`, {
       ...this.httpOpts,
       method: 'POST',
       body: { session_id: sessionId },
     });
+
+    return normalizeReceipt(raw);
   }
 
   // ── Receipt verification ─────────────────────────────────────────────────────
@@ -501,6 +658,7 @@ export class ParafeClient {
    * Verify a session receipt's Ed25519 signature against the broker's public key.
    */
   async verifyReceipt(receipt: SessionReceipt): Promise<VerifyReceiptResult> {
+    // Convert camelCase receipt back to snake_case for the broker
     const raw = await request<{
       valid: boolean;
       signed_by: string | null;
@@ -509,7 +667,7 @@ export class ParafeClient {
     }>(`${this.brokerUrl}/receipt/verify`, {
       ...this.httpOpts,
       method: 'POST',
-      body: { receipt },
+      body: { receipt: denormalizeReceipt(receipt) },
     });
 
     return {

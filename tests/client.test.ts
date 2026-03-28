@@ -3,14 +3,16 @@
  *
  * These tests run against a live broker instance.
  * Set PARAFE_TEST_BROKER_URL to point at your local or remote broker.
- * Set PARAFE_TEST_API_KEY to a valid API key.
- * Set PARAFE_TEST_ADMIN_KEY for admin-level checks (optional).
+ * Default: http://localhost:3000
+ *
+ * No API key is needed — the tests create a fresh org and developer
+ * at the start of each run via POST /auth/signup.
  *
  * Run the broker locally first:
- *   cd ../  &&  npm start
+ *   cd ../broker && npm start
  *
  * Then:
- *   PARAFE_TEST_API_KEY=prf_key_live_... npm run test:integration
+ *   npm run test:integration
  */
 
 import { tmpdir } from 'node:os';
@@ -24,11 +26,33 @@ import {
 const BROKER_URL =
   process.env.PARAFE_TEST_BROKER_URL ?? 'http://localhost:3000';
 
-const API_KEY = process.env.PARAFE_TEST_API_KEY ?? '';
+const RUN_ID = Date.now().toString(36);
+let API_KEY = '';
 
-// Skip all integration tests if no API key is configured
-const SKIP = !API_KEY;
-const maybeDescribe = SKIP ? describe.skip : describe;
+// ─── Bootstrap ───────────────────────────────────────────────────────────────
+
+async function bootstrapTestApiKey(brokerUrl: string): Promise<string> {
+  const res = await fetch(`${brokerUrl}/auth/signup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      org_name: `SDK Test ${RUN_ID}`,
+      email: `sdk-test-${RUN_ID}@example.com`,
+      password: `sdk-test-password-${RUN_ID}`,
+      name: 'SDK Test Developer',
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(`Test bootstrap failed: could not create test account on ${brokerUrl} (${res.status}): ${JSON.stringify(body)}`);
+  }
+  const body = await res.json() as { api_key: { key: string } };
+  return body.api_key.key;
+}
+
+beforeAll(async () => {
+  API_KEY = await bootstrapTestApiKey(BROKER_URL);
+}, 30_000);
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -130,7 +154,7 @@ describe('ParafeClient credential state', () => {
 
 // ─── Full integration flow ────────────────────────────────────────────────────
 
-maybeDescribe('Full integration flow', () => {
+describe('Full integration flow', () => {
   // We register two agents: initiator and target
   let initiatorClient: ParafeClient;
   let targetClient: ParafeClient;
@@ -139,6 +163,8 @@ maybeDescribe('Full integration flow', () => {
   let targetAgentId: string;
   let sessionId: string;
   let consentToken: string;
+  let handshakeId: string;
+  let challengeNonce: string;
   let receipt: Record<string, unknown>;
 
   beforeAll(async () => {
@@ -232,17 +258,13 @@ maybeDescribe('Full integration flow', () => {
 
     expect(result.handshakeId).toMatch(/^hs_/);
     expect(typeof result.challengeForTarget).toBe('string');
-    // Store for next step
-    (globalThis as Record<string, unknown>).__testHandshakeId = result.handshakeId;
-    (globalThis as Record<string, unknown>).__testChallenge = result.challengeForTarget;
+    handshakeId = result.handshakeId;
+    challengeNonce = result.challengeForTarget;
   });
 
   // ── 5. Handshake — complete ────────────────────────────────────────────────
 
   test('completeHandshake() — target side', async () => {
-    const handshakeId = (globalThis as Record<string, unknown>).__testHandshakeId as string;
-    const challengeNonce = (globalThis as Record<string, unknown>).__testChallenge as string;
-
     const result = await targetClient.completeHandshake({ handshakeId, challengeNonce });
 
     expect(result.handshakeId).toBe(handshakeId);
@@ -301,12 +323,12 @@ maybeDescribe('Full integration flow', () => {
   test('closeSession() — returns signed receipt', async () => {
     const result = await initiatorClient.closeSession(sessionId);
 
-    expect(result.receipt_id).toMatch(/^rcpt_/);
-    expect(result.session_id).toBe(sessionId);
+    expect(result.receiptId).toMatch(/^rcpt_/);
+    expect(result.sessionId).toBe(sessionId);
     expect(typeof result.signature).toBe('string');
-    expect(result.signed_by).toBe('parafe-broker');
-    expect(result.participants.initiator.agent_id).toBe(initiatorAgentId);
-    expect(result.participants.target.agent_id).toBe(targetAgentId);
+    expect(result.signedBy).toBe('parafe-broker');
+    expect(result.participants.initiator.agentId).toBe(initiatorAgentId);
+    expect(result.participants.target.agentId).toBe(targetAgentId);
 
     receipt = result as unknown as Record<string, unknown>;
   });
@@ -325,13 +347,14 @@ maybeDescribe('Full integration flow', () => {
   });
 
   test('verifyReceipt() — tampered receipt returns tamper_detected=true', async () => {
+    const receiptTyped = receipt as unknown as import('../src/types.js').SessionReceipt;
     const tampered = {
-      ...receipt,
+      ...receiptTyped,
       participants: {
-        ...(receipt.participants as Record<string, unknown>),
+        ...receiptTyped.participants,
         initiator: {
-          ...((receipt.participants as Record<string, unknown>).initiator as Record<string, unknown>),
-          agent_name: 'tampered-name',
+          ...receiptTyped.participants.initiator,
+          agentName: 'tampered-name',
         },
       },
     };
@@ -423,7 +446,7 @@ maybeDescribe('Full integration flow', () => {
 
 // ─── Error handling ───────────────────────────────────────────────────────────
 
-maybeDescribe('Error handling', () => {
+describe('Error handling', () => {
   test('register() with invalid agent_name throws ValidationError', async () => {
     const client = makeClient();
     await expect(

@@ -200,11 +200,11 @@ npm install
 # Unit tests only (no broker needed)
 npm run test:unit
 
-# Integration tests (requires a running broker)
-PARAFE_TEST_API_KEY=prf_key_live_... npm run test:integration
+# Integration tests (requires a running broker — no API key needed)
+npm run test:integration
 
 # Or point at a specific broker URL
-PARAFE_TEST_BROKER_URL=http://localhost:3000 PARAFE_TEST_API_KEY=prf_key_live_... npm run test:integration
+PARAFE_TEST_BROKER_URL=http://localhost:3000 npm run test:integration
 ```
 
 ## Building
