@@ -1,0 +1,86 @@
+{
+  "name": "@getparafe/sdk",
+  "version": "0.1.0",
+  "description": "Official Node.js/TypeScript SDK for the Parafe Trust Broker",
+  "author": "Parafe",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/getparafe/sdk"
+  },
+  "homepage": "https://github.com/getparafe/sdk#readme",
+  "bugs": {
+    "url": "https://github.com/getparafe/sdk/issues"
+  },
+  "keywords": [
+    "parafe",
+    "trust",
+    "broker",
+    "agent",
+    "identity",
+    "ed25519",
+    "handshake"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "type": "module",
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/types/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "require": {
+        "types": "./dist/types/index.d.ts",
+        "default": "./dist/cjs/index.js"
+      }
+    }
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "npm run build:esm && npm run build:cjs && npm run build:types",
+    "build:esm": "tsc -p tsconfig.esm.json",
+    "build:cjs": "tsc -p tsconfig.cjs.json",
+    "build:types": "tsc -p tsconfig.types.json",
+    "test": "node --experimental-vm-modules node_modules/.bin/jest",
+    "test:unit": "node --experimental-vm-modules node_modules/.bin/jest tests/crypto.test.ts tests/credentials.test.ts",
+    "test:integration": "node --experimental-vm-modules node_modules/.bin/jest tests/client.test.ts",
+    "clean": "rm -rf dist/",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "dependencies": {
+    "jose": "^5.9.6"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.0.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.6",
+    "typescript": "^5.7.3"
+  },
+  "jest": {
+    "preset": "ts-jest/presets/default-esm",
+    "testEnvironment": "node",
+    "extensionsToTreatAsEsm": [".ts"],
+    "moduleNameMapper": {
+      "^(\\.{1,2}/.*)\\.js$": "$1"
+    },
+    "transform": {
+      "^.+\\.tsx?$": [
+        "ts-jest",
+        {
+          "useESM": true,
+          "tsconfig": "tsconfig.json"
+        }
+      ]
+    }
+  }
+}
