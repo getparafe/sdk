@@ -557,11 +557,15 @@ export class ParafeClient {
     consentToken: string,
     brokerPublicKeyBase64: string
   ): Promise<VerifyConsentLocalResult> {
-    const spkiDer = Buffer.from(brokerPublicKeyBase64, 'base64');
-    const publicKey = await jose.importSPKI(
-      `-----BEGIN PUBLIC KEY-----\n${spkiDer.toString('base64')}\n-----END PUBLIC KEY-----`,
-      'EdDSA'
-    );
+    // Convert base64 SPKI DER to PEM format for jose.importSPKI()
+    // The broker returns the key as base64-encoded SPKI DER — wrap in PEM headers directly.
+    // Do NOT decode and re-encode, as that would double-encode the DER structure.
+    const pemLines: string[] = [];
+    for (let i = 0; i < brokerPublicKeyBase64.length; i += 64) {
+      pemLines.push(brokerPublicKeyBase64.slice(i, i + 64));
+    }
+    const pem = `-----BEGIN PUBLIC KEY-----\n${pemLines.join('\n')}\n-----END PUBLIC KEY-----`;
+    const publicKey = await jose.importSPKI(pem, 'EdDSA');
 
     const { payload } = await jose.jwtVerify(consentToken, publicKey, {
       algorithms: ['EdDSA'],
