@@ -160,6 +160,23 @@ await parafe.updateScopePolicies('prf_agent_...', {
 });
 ```
 
+## Reputation Metrics
+
+Retrieve raw trust signals for any agent — useful for assessing trustworthiness before interacting, especially with self-registered agents.
+
+```typescript
+const metrics = await parafe.getAgentMetrics('prf_agent_...');
+
+// metrics.tenureDays          — days since first session
+// metrics.sessions.completionRate  — completed / total (0–1)
+// metrics.counterparties.totalUnique — distinct agents interacted with
+// metrics.handshakes.successRate    — successful / total (0–1)
+// metrics.deniedScopeRequests.last30Days — rejected consent requests in last 30 days
+// metrics.actions.totalRecorded     — total actions logged across all sessions
+```
+
+Returns raw signals, not a composite score — your agent decides how to weight them.
+
 ## Error Handling
 
 The SDK throws typed errors matching the broker's error codes:

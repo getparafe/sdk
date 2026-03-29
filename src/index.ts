@@ -40,6 +40,7 @@ import type {
   RevokeAgentResult,
   RenewCredentialResult,
   UpdateScopePoliciesResult,
+  AgentMetrics,
   VerifyConsentLocalResult,
   BrokerPublicKey,
 } from './types.js';
@@ -780,6 +781,91 @@ export class ParafeClient {
       agentId: raw.agent_id,
       scopePolicies: raw.scope_policies,
       updatedAt: raw.updated_at,
+    };
+  }
+
+  /**
+   * Retrieve reputation metrics for an agent.
+   * Returns raw trust signals computed from the agent's interaction history.
+   */
+  async getAgentMetrics(agentId: string): Promise<AgentMetrics> {
+    const raw = await request<{
+      agent_id: string;
+      computed_at: string;
+      tenure_days: number;
+      identity_assurance: string;
+      sessions: {
+        total: number;
+        completed: number;
+        expired: number;
+        abandoned: number;
+        completion_rate: number;
+      };
+      counterparties: {
+        total_unique: number;
+        as_initiator: number;
+        as_target: number;
+      };
+      handshakes: {
+        total: number;
+        successful: number;
+        failed: number;
+        success_rate: number;
+      };
+      scopes: {
+        unique_scopes: string[];
+        total_scopes_used: number;
+      };
+      denied_scope_requests: {
+        total: number;
+        last_30_days: number;
+        by_reason: Record<string, number>;
+      };
+      actions: {
+        total_recorded: number;
+        avg_per_session: number;
+      };
+    }>(`${this.brokerUrl}/agents/${agentId}/metrics`, {
+      ...this.httpOpts,
+      method: 'GET',
+    });
+
+    return {
+      agentId: raw.agent_id,
+      computedAt: raw.computed_at,
+      tenureDays: raw.tenure_days,
+      identityAssurance: raw.identity_assurance,
+      sessions: {
+        total: raw.sessions.total,
+        completed: raw.sessions.completed,
+        expired: raw.sessions.expired,
+        abandoned: raw.sessions.abandoned,
+        completionRate: raw.sessions.completion_rate,
+      },
+      counterparties: {
+        totalUnique: raw.counterparties.total_unique,
+        asInitiator: raw.counterparties.as_initiator,
+        asTarget: raw.counterparties.as_target,
+      },
+      handshakes: {
+        total: raw.handshakes.total,
+        successful: raw.handshakes.successful,
+        failed: raw.handshakes.failed,
+        successRate: raw.handshakes.success_rate,
+      },
+      scopes: {
+        uniqueScopes: raw.scopes.unique_scopes,
+        totalScopesUsed: raw.scopes.total_scopes_used,
+      },
+      deniedScopeRequests: {
+        total: raw.denied_scope_requests.total,
+        last30Days: raw.denied_scope_requests.last_30_days,
+        byReason: raw.denied_scope_requests.by_reason,
+      },
+      actions: {
+        totalRecorded: raw.actions.total_recorded,
+        avgPerSession: raw.actions.avg_per_session,
+      },
     };
   }
 }

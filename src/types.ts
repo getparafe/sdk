@@ -286,6 +286,58 @@ export interface UpdateScopePoliciesResult {
   updatedAt: string;
 }
 
+// ── getAgentMetrics() ──
+
+export interface SessionMetrics {
+  total: number;
+  completed: number;
+  expired: number;
+  abandoned: number;
+  completionRate: number;
+}
+
+export interface CounterpartyMetrics {
+  totalUnique: number;
+  asInitiator: number;
+  asTarget: number;
+}
+
+export interface HandshakeMetrics {
+  total: number;
+  successful: number;
+  failed: number;
+  successRate: number;
+}
+
+export interface ScopeMetrics {
+  uniqueScopes: string[];
+  totalScopesUsed: number;
+}
+
+export interface DeniedScopeRequestMetrics {
+  total: number;
+  last30Days: number;
+  byReason: Record<string, number>;
+}
+
+export interface ActionMetrics {
+  totalRecorded: number;
+  avgPerSession: number;
+}
+
+export interface AgentMetrics {
+  agentId: string;
+  computedAt: string;
+  tenureDays: number;
+  identityAssurance: string;
+  sessions: SessionMetrics;
+  counterparties: CounterpartyMetrics;
+  handshakes: HandshakeMetrics;
+  scopes: ScopeMetrics;
+  deniedScopeRequests: DeniedScopeRequestMetrics;
+  actions: ActionMetrics;
+}
+
 // ── Encrypted credential file format ──
 
 export interface EncryptedCredentialFile {
