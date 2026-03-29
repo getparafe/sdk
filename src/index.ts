@@ -48,7 +48,7 @@ import type {
 // Re-export everything consumers need
 export { ValidationError, AuthError, ForbiddenError, NotFoundError,
          ConflictError, ExpiredError, RateLimitError, InternalError,
-         ParafeError } from './errors.js';
+         NetworkError, ParafeError } from './errors.js';
 export { generateKeyPair, signChallenge } from './crypto.js';
 export * from './types.js';
 
@@ -791,6 +791,10 @@ export class ParafeClient {
   /**
    * Retrieve reputation metrics for an agent.
    * Returns raw trust signals computed from the agent's interaction history.
+   *
+   * @throws {NotFoundError} 404 — agent not found
+   * @throws {AuthError} 401 — invalid or missing API key
+   * @throws {NetworkError} Network or timeout error after retries exhausted
    */
   async getAgentMetrics(agentId: string): Promise<AgentMetrics> {
     const raw = await request<{

@@ -73,6 +73,13 @@ export class InternalError extends ParafeError {
   }
 }
 
+export class NetworkError extends ParafeError {
+  constructor(message: string, code = 'network_error') {
+    super(message, code, 0);
+    this.name = 'NetworkError';
+  }
+}
+
 /**
  * Map a broker HTTP response to the appropriate typed error.
  */

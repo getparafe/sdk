@@ -5,7 +5,7 @@
  * Does NOT retry 4xx or 500 responses.
  */
 
-import { mapBrokerError, InternalError } from './errors.js';
+import { mapBrokerError, InternalError, NetworkError } from './errors.js';
 
 export interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
@@ -64,7 +64,8 @@ export async function request<T>(
       }
     } catch (err: unknown) {
       // Network error or timeout — retry
-      lastError = err instanceof Error ? err : new Error(String(err));
+      const msg = err instanceof Error ? err.message : String(err);
+      lastError = new NetworkError(msg);
       continue;
     }
 
@@ -114,5 +115,5 @@ export async function request<T>(
   }
 
   // All attempts exhausted
-  throw lastError ?? new Error('Request failed after retries');
+  throw lastError ?? new NetworkError('Request failed after retries');
 }
