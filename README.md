@@ -17,7 +17,7 @@ import { ParafeClient } from '@getparafe/sdk';
 
 // 1. Initialize the client
 const parafe = new ParafeClient({
-  brokerUrl: 'https://parafe-production-9bc9.up.railway.app',
+  brokerUrl: 'https://api.parafe.ai',
   apiKey: 'prf_key_live_...', // From the Parafe Developer Portal
 });
 
@@ -207,6 +207,33 @@ try {
   }
 }
 ```
+
+## API Key Format
+
+API keys issued by the broker follow this format:
+
+```
+prf_key_live_<64 hex chars>
+```
+
+- Prefix: `prf_key_live_` (13 characters) — identifies the key as a Parafe live API key
+- Suffix: 64 random hex characters (32 bytes)
+- Total length: 77 characters
+- The `key_prefix` field returned at creation contains the first 21 characters (prefix + 8 hex chars), useful for display in UIs without exposing the full key
+
+Keys are shown **once** at creation and stored as SHA-256 hashes — they cannot be recovered. Use the Developer Portal to generate replacements.
+
+## Verifiable Digital Credentials (VDC)
+
+The broker returns all trust artifacts in dual format:
+
+| Artifact | JWT field | VDC field |
+|----------|-----------|-----------|
+| Agent credential | `credential` | `credential_vdc` |
+| Consent token | `consent_token.token` | `consent_token.token_vdc` |
+| Receipt | `signature` | `receipt_vdc` |
+
+The SDK works with the JWT fields. If you need W3C Verifiable Credential format (e.g., for interop with other trust frameworks), use the `_vdc` fields from the raw broker API response.
 
 ## Running Tests
 
