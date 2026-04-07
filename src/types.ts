@@ -200,6 +200,7 @@ export interface ReceiptParticipant {
 export interface ReceiptConsentToken {
   scope: string;
   permissions: string[];
+  exclusions: string[];
   authorization: Authorization;
   issuedAt: string;
   expiredAt: string;

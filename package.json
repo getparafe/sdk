@@ -54,7 +54,7 @@
     "test:unit": "node --experimental-vm-modules node_modules/.bin/jest tests/crypto.test.ts tests/credentials.test.ts",
     "test:integration": "node --experimental-vm-modules node_modules/.bin/jest tests/client.test.ts",
     "clean": "rm -rf dist/",
-    "prepublishOnly": "npm run clean && npm run build"
+    "prepublishOnly": "npm run test:unit && npm run clean && npm run build"
   },
   "dependencies": {
     "jose": "^5.9.6"

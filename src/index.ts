@@ -147,6 +147,7 @@ function normalizeReceipt(raw: Record<string, unknown>): SessionReceipt {
     consentTokens: consentTokens.map(ct => ({
       scope: ct.scope as string,
       permissions: ct.permissions as string[],
+      exclusions: (ct.exclusions as string[]) ?? (ct.excluded as string[]) ?? [],
       authorization: ct.authorization as Authorization,
       issuedAt: ct.issued_at as string,
       expiredAt: ct.expired_at as string,
@@ -187,6 +188,7 @@ function denormalizeReceipt(receipt: SessionReceipt): Record<string, unknown> {
     consent_tokens: receipt.consentTokens.map(ct => ({
       scope: ct.scope,
       permissions: ct.permissions,
+      excluded: ct.exclusions,
       authorization: ct.authorization,
       issued_at: ct.issuedAt,
       expired_at: ct.expiredAt,

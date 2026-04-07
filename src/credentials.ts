@@ -12,7 +12,7 @@
  */
 
 import * as nodeCrypto from 'node:crypto';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, chmod } from 'node:fs/promises';
 import type { StoredCredentials, EncryptedCredentialFile } from './types.js';
 
 const SCRYPT_N = 16384;
@@ -62,6 +62,7 @@ export async function encryptCredentials(
   };
 
   await writeFile(filePath, JSON.stringify(fileData, null, 2), 'utf8');
+  await chmod(filePath, 0o600);
 }
 
 /**
