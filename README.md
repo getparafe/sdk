@@ -105,6 +105,8 @@ const verification = await parafe.verifyReceipt(receipt);
 // { valid: true, tamperDetected: false, signedBy: 'parafe-broker' }
 ```
 
+> For third parties who receive a Parafe receipt but don't want the full SDK, [`@getparafe/verify`](https://github.com/getparafe/verify) is a minimal standalone package that offers the same offline verification for credentials, consent tokens, and receipts (JWT + VDC formats) — no Parafe account required, works in Node and browsers.
+
 ## Scope Escalation
 
 Request additional scope within an existing session without re-handshaking:
