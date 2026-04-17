@@ -186,9 +186,11 @@ function denormalizeReceipt(receipt: SessionReceipt): Record<string, unknown> {
       completed_at: receipt.handshake.completedAt,
     },
     consent_tokens: receipt.consentTokens.map(ct => ({
+      // Broker's signed receipt (broker/src/routes/receipt.js buildReceipt) does NOT
+      // include an "excluded" field. Adding one here breaks signature verification
+      // on round-trip, so we omit it.
       scope: ct.scope,
       permissions: ct.permissions,
-      excluded: ct.exclusions,
       authorization: ct.authorization,
       issued_at: ct.issuedAt,
       expired_at: ct.expiredAt,
