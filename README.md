@@ -48,6 +48,21 @@ const status = parafe.credentialStatus();
 // { loaded: true, agentId: 'prf_agent_...', expiresAt: '...', expired: false }
 ```
 
+### Trying the full flow on your own
+
+A handshake needs two agents, and each `ParafeClient` holds one agent's credentials. To play both sides yourself, create two clients with the same API key:
+
+```typescript
+const initiator = new ParafeClient({ brokerUrl: 'https://api.parafe.ai', apiKey });
+const target = new ParafeClient({ brokerUrl: 'https://api.parafe.ai', apiKey });
+await initiator.register({ name: 'my-initiator', type: 'personal', owner: 'Me' });
+await target.register({ name: 'my-target', type: 'personal', owner: 'Me', scopePolicies: { /* ... */ } });
+```
+
+Scope policies are enforced. The example above requires `minimum_verification_tier: 'email_verified'`, so a brand-new, unverified account will get `403 tier_insufficient` on `handshake()`. Verify your email in the [Developer Portal](https://platform.parafe.ai), or leave out `minimum_verification_tier` while you experiment.
+
+Agent names must be unique — pick your own rather than copying the examples.
+
 ## Handshake Flow
 
 ### Initiator side
@@ -215,13 +230,14 @@ try {
 API keys issued by the broker follow this format:
 
 ```
-prf_key_live_<64 hex chars>
+prf_key_live_user_<64 hex chars>   # personal key
+prf_key_live_org_<64 hex chars>    # organization key
 ```
 
-- Prefix: `prf_key_live_` (13 characters) — identifies the key as a Parafe live API key
+- Prefix: `prf_key_live_user_` or `prf_key_live_org_` — identifies a Parafe live API key and whether it belongs to you or to an organization. Older keys use the bare `prf_key_live_<64 hex>` form and keep working.
 - Suffix: 64 random hex characters (32 bytes)
-- Total length: 77 characters
-- The `key_prefix` field returned at creation contains the first 21 characters (prefix + 8 hex chars), useful for display in UIs without exposing the full key
+- The `key_prefix` field returned at creation contains the first 21 characters, useful for display in UIs without exposing the full key
+- Keys carry permission scopes. The starter key issued at signup can read and register agents; create a key in the Developer Portal for anything more.
 
 Keys are shown **once** at creation and stored as SHA-256 hashes — they cannot be recovered. Use the Developer Portal to generate replacements.
 
