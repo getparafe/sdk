@@ -34,4 +34,4 @@ npm test               # Jest tests
 - Maintain snake_case → camelCase normalization for any new response types.
 - The `verifyConsentLocally` method does offline Ed25519 verification — test carefully if modifying crypto paths.
 - Run `npm test` and `npm run build` before pushing. Published via GitHub Actions on release.
-- This SDK is a dependency of both `@getparafe/mcp-server` and `@getparafe/a2a-extension`. Breaking changes affect downstream packages.
+- This SDK is a dependency of `@getparafe/mcp-server`. `@getparafe/a2a-extension` does not depend on it (only `jose`), but its docs show the two used together. Breaking changes affect downstream packages.
