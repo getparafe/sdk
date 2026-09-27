@@ -22,6 +22,10 @@ jobs:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
+      # Trusted publishing (OIDC) needs npm >= 11.5.1; Node 22 ships npm 10.
+      - name: Upgrade npm
+        run: npm install -g npm@latest
+
       - name: Install dependencies
         run: npm install
 
@@ -36,7 +40,9 @@ jobs:
           PARAFE_TEST_BROKER_URL: ${{ secrets.STAGING_BROKER_URL }}
         run: npm run test:integration
 
+      # Uses npm trusted publishing: GitHub's OIDC identity (id-token: write
+      # above) replaces a long-lived NPM_TOKEN. Configured on npmjs.com under
+      # @getparafe/sdk > Settings > Trusted Publisher (repo getparafe/sdk,
+      # workflow publish.yml). --provenance links the package to this build.
       - name: Publish to npm
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --provenance
