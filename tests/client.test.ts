@@ -302,21 +302,37 @@ describe('Full integration flow', () => {
     expect(result.permitted).toBe(false);
   });
 
-  // ── 7. Record actions ─────────────────────────────────────────────────────
+  // ── 7. Action receipts (B6) ───────────────────────────────────────────────
 
-  test('recordAction() — within scope', async () => {
-    const result = await initiatorClient.recordAction({
-      sessionId,
-      agentId: initiatorAgentId,
-      action: 'read_data',
-      details: { resource: 'booking/123' },
-      consentToken,
+  let actionReceipt: string;
+  let refusalReceipt: string;
+
+  test('recordActionReceipt() — the target signs what it did and files it; the broker acknowledges it', async () => {
+    const result = await targetClient.recordActionReceipt({
+      sessionId, consentToken, action: 'read_data', details: { resource: 'booking/123' }, businessRef: 'booking/123',
     });
+    expect(result.receipt.split('.')).toHaveLength(3);
+    expect(result.ack.seq).toBe(1);
+    expect(result.ack.duplicate).toBe(false);
+    expect(result.ack.claims.receipt_iss).toMatch(/^did:web:.*:agents:/);
+    actionReceipt = result.receipt;
+  });
 
-    expect(result.recorded).toBe(true);
-    expect(result.withinScope).toBe(true);
-    expect(result.actionId).toMatch(/^act_/);
-    expect(result.action).toBe('read_data');
+  test('fileActionReceipt() — the initiator filing the same receipt gets the original acknowledgment', async () => {
+    const ack = await initiatorClient.fileActionReceipt(sessionId, actionReceipt);
+    expect(ack.duplicate).toBe(true);
+    expect(ack.seq).toBe(1);
+  });
+
+  test('signActionReceipt() — a refusal is receipted too; the initiator files it when the target does not', async () => {
+    refusalReceipt = await targetClient.signActionReceipt({
+      sessionId, consentToken, action: 'delete_all', result: 'error', error: 'excluded', errorDescription: 'delete_all is excluded',
+    });
+    const ack = await initiatorClient.fileActionReceipt(sessionId, refusalReceipt);
+    expect(ack.seq).toBe(2);
+    const index = await initiatorClient.getActionReceipts(sessionId);
+    expect(index.entries.map((e) => [e.action, e.result, e.error])).toEqual([['read_data', 'success', null], ['delete_all', 'error', 'excluded']]);
+    expect(index.chainHead).toBe(index.entries[1].entryHash);
   });
 
   test('verifyConsentLocally() — verifies against the broker JWKS; the token is key-bound', async () => {
@@ -352,6 +368,8 @@ describe('Full integration flow', () => {
     expect(result.participants.target.agentId).toBe(targetAgentId);
     expect(result.session.closedBy).toBe(initiatorAgentId);
     expect(result.consentTokens[0].initiatorProof).toBe('pop');
+    expect(result.actions.map((a) => [a.seq, a.action, a.result, a.error])).toEqual([[1, 'read_data', 'success', null], [2, 'delete_all', 'error', 'excluded']]);
+    expect(result.chainHead).toBeTruthy();
 
     receipt = result as unknown as Record<string, unknown>;
   });

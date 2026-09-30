@@ -223,6 +223,95 @@ export interface VerifyConsentResult {
 
 // ── recordAction() ──
 
+// ── Action receipts (B6) ──
+
+/** Why an action was refused or failed (an action receipt's `error`). */
+export type ActionErrorCode = 'not_permitted' | 'excluded' | 'consent_invalid' | 'consent_expired' | 'proof_invalid' | 'failed';
+
+export type ReceiptKind = 'parafe.action_receipt' | 'ap2.checkout_receipt' | 'ap2.payment_receipt';
+
+export interface SignActionReceiptOptions {
+  sessionId: string;
+  /** The consent token the action was requested under (the receipt carries its hash). */
+  consentToken: string;
+  /** The action, e.g. a permission name like `create_order`. */
+  action: string;
+  /** Default 'success'; 'error' needs `error`. */
+  result?: 'success' | 'error';
+  error?: ActionErrorCode;
+  errorDescription?: string;
+  /** The request message (bytes or string): the receipt carries its SHA-256 (`request_ref`). */
+  request?: string | Uint8Array;
+  /** Or the reference itself. */
+  requestRef?: string;
+  /** Details of what was done: the receipt carries only their hash (`details_hash`, JCS). */
+  details?: unknown;
+  detailsHash?: string;
+  /** Your own reference for the outcome, e.g. an order ID. The broker sees it. */
+  businessRef?: string;
+  /** An AP2 closed-mandate hash, when the action was AP2-authorized. */
+  mandateRef?: string;
+}
+
+/** The broker's signed acknowledgment that a receipt was indexed. */
+export interface ActionReceiptAck {
+  sessionId: string;
+  seq: number;
+  receiptHash: string;
+  entryHash: string;
+  /** The acknowledgment: a JWS signed by the broker (typ parafe-index-ack+jwt). */
+  acknowledgment: string;
+  /** Decoded from the acknowledgment. */
+  claims: Record<string, unknown>;
+  /** True when the receipt was already filed (by you or the other participant). */
+  duplicate: boolean;
+}
+
+export interface RecordActionReceiptResult {
+  /** The action receipt you signed (a JWS). Return it to the other agent too. */
+  receipt: string;
+  ack: ActionReceiptAck;
+}
+
+export interface SessionIndexEntry {
+  seq: number;
+  kind: ReceiptKind | string;
+  /** The receipt exactly as filed. */
+  receipt: string;
+  receiptHash: string;
+  receiptIss: string;
+  issuerVerified: boolean;
+  action: string;
+  result: 'success' | 'error';
+  error: string | null;
+  businessRef: string | null;
+  prev: string | null;
+  entryHash: string;
+  indexedAt: string;
+  filedBy: string | null;
+  acknowledgment: string;
+}
+
+export interface SessionIndex {
+  sessionId: string;
+  chainHead: string | null;
+  entries: SessionIndexEntry[];
+}
+
+/** A session receipt's entry for a filed receipt. */
+export interface ReceiptAction {
+  seq: number;
+  receiptHash: string;
+  kind: ReceiptKind | string;
+  /** The receipt's issuer (an agent DID, or an AP2 receipt's iss). */
+  iss: string;
+  issuerVerified: boolean;
+  action: string;
+  result: 'success' | 'error';
+  error: string | null;
+}
+
+/** @deprecated `/interaction/record` is replaced by action receipts (`recordActionReceipt`). */
 export interface RecordActionOptions {
   sessionId: string;
   agentId: string;
@@ -292,8 +381,9 @@ export interface SessionReceipt {
     contextHash: string | null;
   };
   consentTokens: ReceiptConsentToken[];
-  /** Per-action receipts (Phase 2); empty for now. */
-  actions: unknown[];
+  /** Every receipt filed in the session's index, in order (B6). */
+  actions: ReceiptAction[];
+  /** The index chain head (entry hash of the last action), or null when none was filed. */
   chainHead: string | null;
   session: {
     startedAt: string;

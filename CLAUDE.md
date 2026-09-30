@@ -28,6 +28,7 @@ npm test               # Jest tests
 - **Broker keys** — `verifyConsentLocally` and `verifyReceiptLocally` resolve broker keys from the JWKS (`getJwks()`, cached 5 min, falls back to `/public-key` on a pre-2026-09-30 broker). The legacy base64 SPKI key is still accepted; it's wrapped in PEM headers without re-encoding.
 - **Proof of possession (0.4.0)** — every call that authenticates with the agent's credential also sends a `Parafe-PoP` header signed with its key (`proofHeader`/`agentHttpOpts`). Keep this for any new credential-authenticated method.
 - **Receipts are JWS (0.4.0)** — `SessionReceipt.receipt` is the evidence; the rest is decoded from it. Never rebuild or re-serialize a receipt.
+- **Action receipts (0.6.0)** — `signActionReceipt` signs with the agent key (`kid` = `<agent DID>#keys-1`; the DID comes from the SD-JWT credential, else the agent's DID document); `fileActionReceipt` treats a 409 `duplicate_receipt` as success (`duplicate: true`, the original acknowledgment). `recordAction` (`/interaction/record`) is deprecated.
 - **Retry logic** — `http.ts` retries on 502/503/504 with exponential backoff (200ms * 2^attempt). Other errors fail immediately.
 
 ## When Making Changes

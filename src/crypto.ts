@@ -83,7 +83,7 @@ export async function signProof(privateKeyBase64: string, claims: Record<string,
 }
 
 /** base64url(SHA-256(value)): how Parafé artifacts reference each other. */
-export function sha256b64u(value: string): string {
+export function sha256b64u(value: string | Uint8Array): string {
   return nodeCrypto.createHash('sha256').update(value).digest('base64url');
 }
 
@@ -113,4 +113,45 @@ export function publicKeyThumbprint(publicKeyBase64: string): string {
     ? { crv: jwk.crv, kty: jwk.kty, x: jwk.x, y: jwk.y }
     : { crv: jwk.crv, kty: jwk.kty, x: jwk.x };
   return sha256b64u(JSON.stringify(members));
+}
+
+/**
+ * RFC 8785 (JCS) canonical JSON: object keys sorted by UTF-16 code units, no
+ * whitespace. The broker hashes JSON values this way.
+ */
+export function jcs(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    if (typeof value === 'number' && !Number.isFinite(value)) throw new Error('JCS: non-finite number');
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) return `[${value.map((v) => (v === undefined ? 'null' : jcs(v))).join(',')}]`;
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).filter((k) => obj[k] !== undefined).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${jcs(obj[k])}`).join(',')}}`;
+}
+
+/** base64url(SHA-256(JCS(value))): an action receipt's `details_hash`. */
+export function jsonHash(value: unknown): string {
+  return sha256b64u(jcs(value));
+}
+
+export const ACTION_RECEIPT_TYP = 'parafe-action-receipt+jwt';
+
+/**
+ * Sign an action receipt (AP2 change request B6) with the agent's key: a
+ * compact JWS, typ `parafe-action-receipt+jwt`, kid `<agent DID>#keys-1`.
+ * `claims` are the receipt's claims other than iss, iat, jti and ver.
+ */
+export async function signActionReceipt(
+  privateKeyBase64: string,
+  agentDid: string,
+  claims: Record<string, unknown>
+): Promise<string> {
+  const privateKey = loadPrivateKey(privateKeyBase64);
+  return new jose.SignJWT({ ver: 1, ...claims })
+    .setProtectedHeader({ alg: keyAlg(privateKey), kid: `${agentDid}#keys-1`, typ: ACTION_RECEIPT_TYP })
+    .setIssuer(agentDid)
+    .setIssuedAt()
+    .setJti(nodeCrypto.randomUUID())
+    .sign(privateKey);
 }

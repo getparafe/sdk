@@ -56,9 +56,13 @@ export class NotFoundError extends ParafeError {
 }
 
 export class ConflictError extends ParafeError {
-  constructor(message: string, code = 'conflict') {
+  /** The broker's response body (e.g. a duplicate action receipt's original acknowledgment). */
+  public readonly body?: Record<string, unknown>;
+
+  constructor(message: string, code = 'conflict', body?: Record<string, unknown>) {
     super(message, code, 409);
     this.name = 'ConflictError';
+    if (body) this.body = body;
   }
 }
 
@@ -114,7 +118,7 @@ export function mapBrokerError(statusCode: number, body: Record<string, unknown>
     case 404:
       return new NotFoundError(message, code);
     case 409:
-      return new ConflictError(message, code);
+      return new ConflictError(message, code, body);
     case 410:
       return new ExpiredError(message, code);
     case 429:

@@ -93,7 +93,7 @@ const { sessionId, consentToken } = await parafe.completeHandshake({
 });
 ```
 
-### Verify consent and record actions
+### Verify consent and receipt each action
 
 ```typescript
 // Verify an action is permitted
@@ -104,14 +104,20 @@ const check = await parafe.verifyConsent({
 });
 // { valid: true, permitted: true, action: 'read_bookings' }
 
-// Record an action (logged on the session; see "What the receipt contains" below)
-await parafe.recordAction({
+// The agent that performs (or refuses) an action signs an action receipt and
+// files it with the broker, which indexes it for the session
+const { receipt: actionReceipt, ack } = await parafe.recordActionReceipt({
   sessionId,
-  agentId: agent.agentId,
+  consentToken: consentToken.token,  // the token the action was requested under
   action: 'read_bookings',
-  details: { bookingRef: 'BK-001' },
-  consentToken: consentToken.token,
+  details: { bookingRef: 'BK-001' },  // only its hash goes on the receipt
+  businessRef: 'BK-001',              // your reference; the broker sees it
 });
+// ack.seq: its place in the session's index; ack.acknowledgment: the broker's signed JWS.
+// Return actionReceipt to the other agent: either side may file it (a duplicate returns the same ack).
+
+// Refusals get a receipt too
+await parafe.recordActionReceipt({ sessionId, consentToken: consentToken.token, action: 'delete_booking', result: 'error', error: 'excluded' });
 
 // Close the session — returns the signed receipt
 const receipt = await parafe.closeSession(sessionId);
@@ -127,7 +133,7 @@ const verification = await parafe.verifyReceipt(receipt);
 const offline = await parafe.verifyReceiptLocally(receipt);
 ```
 
-**Proof of possession.** Wherever the SDK authenticates as your agent with its credential (`handshake()`, `escalateScope()`, `recordAction()`, `closeSession()`, `getReceipt()`, `revokeAgent()`, `updateScopePolicies()`), it also signs a `Parafe-PoP` proof with the agent's private key, bound to that request. A leaked credential is useless on its own. Nothing to do on your side.
+**Proof of possession.** Wherever the SDK authenticates as your agent with its credential (`handshake()`, `escalateScope()`, `recordActionReceipt()`, `fileActionReceipt()`, `getActionReceipts()`, `closeSession()`, `getReceipt()`, `revokeAgent()`, `updateScopePolicies()`), it also signs a `Parafe-PoP` proof with the agent's private key, bound to that request. A leaked credential is useless on its own. Nothing to do on your side.
 
 **Key-bound consent tokens.** A consent token names the initiator (`sub`), the target (`aud`, its DID) and the initiator's key (`cnf.jkt`). When you present one to a target, attach a presentation proof so it can check you hold that key:
 
@@ -138,9 +144,11 @@ await target.verifyConsent({ consentToken: token, action: 'read_bookings', sessi
 // { valid: true, permitted: true, keyBound: true, proofVerified: true }
 ```
 
-**What the receipt contains:** both participants (agent ID, DID, assurance, tier), mutual authentication and a hash of the handshake `context`, every consent token issued in the session (a hash of the token, scope, permissions, **exclusions**, authorization modality, a hash of the human's instruction rather than its text, and how the initiator proved itself: `pop` or `credential`), and the session times and who closed it. It does **not** yet list the actions recorded with `recordAction()`: per-action receipts come next (Phase 2).
+**What the receipt contains:** both participants (agent ID, DID, assurance, tier), mutual authentication and a hash of the handshake `context`, every consent token issued in the session (a hash of the token, scope, permissions, **exclusions**, authorization modality, a hash of the human's instruction rather than its text, and how the initiator proved itself: `pop` or `credential`), every action receipt filed in the session (its hash, who signed it, the action, the result and error code) with the index's chain head, and the session times and who closed it. The broker learns action names, results and business references, never request or response content.
 
-> For third parties who receive a Parafe receipt but don't want the full SDK, [`@getparafe/verify`](https://github.com/getparafe/verify) is a minimal standalone package that offers the same offline verification for credentials, consent tokens, and receipts. Give it `receipt.receipt` (the JWS). No Parafe account required; works in Node and browsers.
+**Action receipts (0.6.0).** `signActionReceipt()` signs a receipt with your agent's key (`typ: parafe-action-receipt+jwt`); `fileActionReceipt(sessionId, receipt)` files it (yours, the other agent's, or an AP2 Checkout/Payment Receipt with `{ kind: 'ap2.checkout_receipt' }`); `recordActionReceipt()` does both; `getActionReceipts(sessionId)` lists the session's index. File before the session is closed: a receipt filed after close is refused. Error codes: `not_permitted`, `excluded`, `consent_invalid`, `consent_expired`, `proof_invalid` (a consent check failed) and `failed` (you tried and it failed). `recordAction()` (`/interaction/record`) is deprecated and is being retired.
+
+> For third parties who receive a Parafe receipt but don't want the full SDK, [`@getparafe/verify`](https://github.com/getparafe/verify) is a minimal standalone package that offers the same offline verification for credentials, consent tokens, and receipts, plus action receipts and the session index (`verifyActionReceipt`, `verifySessionIndex`). Give it `receipt.receipt` (the JWS). No Parafe account required; works in Node and browsers.
 
 ## Scope Escalation
 

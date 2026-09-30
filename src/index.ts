@@ -10,10 +10,10 @@
  *   });
  */
 
-import { generateKeyPair, signChallenge, signProof, createPresentationProof } from './crypto.js';
+import { generateKeyPair, signChallenge, signProof, createPresentationProof, signActionReceipt as signActionReceiptJws, sha256b64u, jsonHash } from './crypto.js';
 import { encryptCredentials, decryptCredentials } from './credentials.js';
 import { request } from './http.js';
-import { ValidationError, AuthError, NotFoundError, ParafeError } from './errors.js';
+import { ValidationError, AuthError, NotFoundError, ParafeError, ConflictError } from './errors.js';
 import * as jose from 'jose';
 import type {
   ParafeClientOptions,
@@ -47,13 +47,18 @@ import type {
   BrokerJwks,
   ClaimLink,
   ClaimStatus,
+  SignActionReceiptOptions,
+  ActionReceiptAck,
+  RecordActionReceiptResult,
+  SessionIndex,
+  ReceiptKind,
 } from './types.js';
 
 // Re-export everything consumers need
 export { ValidationError, AuthError, ForbiddenError, NotFoundError,
          ConflictError, ExpiredError, RateLimitError, InternalError,
          NetworkError, ParafeError } from './errors.js';
-export { generateKeyPair, signChallenge, signProof, createPresentationProof, publicKeyThumbprint } from './crypto.js';
+export { generateKeyPair, signChallenge, signProof, createPresentationProof, publicKeyThumbprint, jcs, jsonHash, sha256b64u } from './crypto.js';
 export type { KeyAlgorithm, KeyPair } from './crypto.js';
 export * from './types.js';
 
@@ -184,7 +189,16 @@ export function decodeReceipt(jws: string): SessionReceipt {
         expiresAt: ct.expires_at as string,
       };
     }),
-    actions: (c.actions as unknown[]) ?? [],
+    actions: ((c.actions as Record<string, unknown>[]) ?? []).map((a) => ({
+      seq: a.seq as number,
+      receiptHash: a.receipt_hash as string,
+      kind: a.kind as string,
+      iss: a.iss as string,
+      issuerVerified: a.issuer_verified !== false,
+      action: a.action as string,
+      result: a.result as 'success' | 'error',
+      error: (a.error as string) ?? null,
+    })),
     chainHead: (c.chain_head as string) ?? null,
     session: {
       startedAt: session.started_at as string,
@@ -193,6 +207,19 @@ export function decodeReceipt(jws: string): SessionReceipt {
       status: session.status as string,
     },
     claims: c,
+  };
+}
+
+function ackFromResponse(raw: Record<string, unknown>, duplicate: boolean): ActionReceiptAck {
+  const acknowledgment = raw.acknowledgment as string;
+  return {
+    sessionId: raw.session_id as string,
+    seq: raw.seq as number,
+    receiptHash: raw.receipt_hash as string,
+    entryHash: raw.entry_hash as string,
+    acknowledgment,
+    claims: (raw.claims as Record<string, unknown>) ?? jose.decodeJwt(acknowledgment),
+    duplicate,
   };
 }
 
@@ -781,9 +808,131 @@ export class ParafeClient {
     };
   }
 
-  // ── Interaction recording ────────────────────────────────────────────────────
+  // ── Action receipts and the session index (B6) ───────────────────────────────
+
+  private readonly didCache = new Map<string, string>();
+
+  /** The loaded agent's DID: from its SD-JWT VC credential, else its DID document. */
+  private async agentDid(): Promise<string> {
+    const creds = this.requireCredentials();
+    const cached = this.didCache.get(creds.agentId);
+    if (cached) return cached;
+    let did: string | undefined;
+    if (creds.credentialSdJwt) {
+      try {
+        const sub = jose.decodeJwt(creds.credentialSdJwt.split('~')[0] as string).sub;
+        if (typeof sub === 'string' && sub.endsWith(`:agents:${creds.agentId}`)) did = sub;
+      } catch {
+        // fall back to the DID document
+      }
+    }
+    if (!did) {
+      const doc = await request<{ id: string }>(`${this.brokerUrl}/agents/${encodeURIComponent(creds.agentId)}/did.json`, { ...this.httpOpts, method: 'GET' });
+      did = doc.id;
+    }
+    this.didCache.set(creds.agentId, did);
+    return did;
+  }
 
   /**
+   * Sign an action receipt as the loaded agent: the agent that performs or
+   * refuses an action signs what happened, bound to the consent token it was
+   * asked under. Sign one for refusals too (`result: 'error'`, `error:
+   * 'excluded'` etc.). Returns the receipt (a JWS); file it with
+   * `fileActionReceipt()` and return it to the other agent.
+   */
+  async signActionReceipt(opts: SignActionReceiptOptions): Promise<string> {
+    const creds = this.requireCredentials();
+    const result = opts.result ?? 'success';
+    if (result === 'error' && !opts.error) throw new ValidationError("An 'error' receipt needs error (e.g. 'excluded')", 'validation_error');
+    if (result === 'success' && opts.error) throw new ValidationError("A 'success' receipt has no error", 'validation_error');
+    const requestRef = opts.requestRef ?? (opts.request !== undefined ? sha256b64u(opts.request) : null);
+    return signActionReceiptJws(creds.privateKey, await this.agentDid(), {
+      session_id: opts.sessionId,
+      consent_ref: sha256b64u(opts.consentToken),
+      action: opts.action,
+      result,
+      error: result === 'error' ? opts.error : null,
+      error_description: opts.errorDescription ?? null,
+      request_ref: requestRef,
+      details_hash: opts.detailsHash ?? (opts.details !== undefined ? jsonHash(opts.details) : null),
+      business_ref: opts.businessRef ?? null,
+      mandate_ref: opts.mandateRef ?? null,
+    });
+  }
+
+  /**
+   * File a receipt in the session's index (either participant may file any
+   * receipt of the session). Returns the broker's signed acknowledgment. A
+   * receipt already filed (by you or the other agent) returns its original
+   * acknowledgment with `duplicate: true`. File before the session is closed.
+   * `kind` files an AP2 Checkout or Payment Receipt unchanged.
+   */
+  async fileActionReceipt(sessionId: string, receipt: string, opts: { kind?: ReceiptKind } = {}): Promise<ActionReceiptAck> {
+    const url = `${this.brokerUrl}/sessions/${encodeURIComponent(sessionId)}/action-receipts`;
+    try {
+      const raw = await request<Record<string, unknown>>(url, {
+        ...(await this.agentHttpOpts('POST', url, { session_id: sessionId })),
+        method: 'POST',
+        body: { receipt, ...(opts.kind ? { kind: opts.kind } : {}) },
+      });
+      return ackFromResponse(raw, false);
+    } catch (err) {
+      if (err instanceof ConflictError && err.code === 'duplicate_receipt' && err.body && typeof err.body.acknowledgment === 'string') {
+        return ackFromResponse(err.body, true);
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Sign an action receipt as the loaded agent and file it: the one-call
+   * replacement for `recordAction()`. Returns the receipt (send it back to the
+   * other agent) and the broker's acknowledgment.
+   */
+  async recordActionReceipt(opts: SignActionReceiptOptions): Promise<RecordActionReceiptResult> {
+    const receipt = await this.signActionReceipt(opts);
+    const ack = await this.fileActionReceipt(opts.sessionId, receipt);
+    return { receipt, ack };
+  }
+
+  /** The session's index: every receipt filed so far, as filed, with its acknowledgment. Either participant. */
+  async getActionReceipts(sessionId: string): Promise<SessionIndex> {
+    const url = `${this.brokerUrl}/sessions/${encodeURIComponent(sessionId)}/action-receipts`;
+    const raw = await request<{ session_id: string; chain_head: string | null; entries: Record<string, unknown>[] }>(url, {
+      ...(await this.agentHttpOpts('GET', url, { session_id: sessionId })),
+      method: 'GET',
+    });
+    return {
+      sessionId: raw.session_id,
+      chainHead: raw.chain_head,
+      entries: raw.entries.map((e) => ({
+        seq: e.seq as number,
+        kind: e.kind as string,
+        receipt: e.receipt as string,
+        receiptHash: e.receipt_hash as string,
+        receiptIss: e.receipt_iss as string,
+        issuerVerified: e.issuer_verified as boolean,
+        action: e.action as string,
+        result: e.result as 'success' | 'error',
+        error: (e.error as string) ?? null,
+        businessRef: (e.business_ref as string) ?? null,
+        prev: (e.prev as string) ?? null,
+        entryHash: e.entry_hash as string,
+        indexedAt: e.indexed_at as string,
+        filedBy: (e.filed_by as string) ?? null,
+        acknowledgment: e.acknowledgment as string,
+      })),
+    };
+  }
+
+  // ── Interaction recording (before B6) ────────────────────────────────────────
+
+  /**
+   * @deprecated Use `recordActionReceipt()`: the acting agent signs what
+   * happened and the broker indexes it. `/interaction/record` is being retired
+   * (the broker will answer 410 Gone).
+   *
    * Record an action within an active session.
    * Authenticates as the loaded agent (its credential) when `agentId` is that agent,
    * otherwise with the API key; the broker requires the caller to be that participant.
