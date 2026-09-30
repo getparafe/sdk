@@ -329,6 +329,9 @@ describe('Full integration flow', () => {
     expect(result.signedBy).toBe('parafe-broker');
     expect(result.participants.initiator.agentId).toBe(initiatorAgentId);
     expect(result.participants.target.agentId).toBe(targetAgentId);
+    // B3: the receipt as the broker issued it, for @getparafe/verify and storage
+    expect(result.issued?.receipt_id).toBe(result.receiptId);
+    expect(result.issued?.signature).toBe(result.signature);
 
     receipt = result as unknown as Record<string, unknown>;
   });

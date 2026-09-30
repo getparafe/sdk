@@ -103,7 +103,7 @@ const check = await parafe.verifyConsent({
 });
 // { valid: true, permitted: true, action: 'read_bookings' }
 
-// Record an action
+// Record an action (logged on the session; see "What the receipt contains" below)
 await parafe.recordAction({
   sessionId,
   agentId: agent.agentId,
@@ -122,9 +122,15 @@ const receipt = await parafe.closeSession(sessionId);
 // Independently verify the receipt
 const verification = await parafe.verifyReceipt(receipt);
 // { valid: true, tamperDetected: false, signedBy: 'parafe-broker' }
+
+// The receipt exactly as the broker signed it (snake_case). Store this, or hand
+// it to @getparafe/verify; the camelCase fields are a convenience copy.
+const signedReceipt = receipt.issued;
 ```
 
-> For third parties who receive a Parafe receipt but don't want the full SDK, [`@getparafe/verify`](https://github.com/getparafe/verify) is a minimal standalone package that offers the same offline verification for credentials, consent tokens, and receipts (JWT + VDC formats) — no Parafe account required, works in Node and browsers.
+**What the receipt contains today:** both participants, the handshake, every consent token issued in the session (scope, permissions, authorization modality and evidence) and the session times, signed by the broker. It does **not** yet list the actions recorded with `recordAction()`, the consent tokens' exclusions, or the handshake `context`, and only the agent that closes the session receives it. Receipt v2 will change all of that.
+
+> For third parties who receive a Parafe receipt but don't want the full SDK, [`@getparafe/verify`](https://github.com/getparafe/verify) is a minimal standalone package that offers the same offline verification for credentials, consent tokens, and receipts. Give it `receipt.issued`. No Parafe account required; works in Node and browsers.
 
 ## Scope Escalation
 
@@ -136,10 +142,9 @@ const escalated = await parafe.escalateScope({
   targetAgentId: 'prf_agent_target01',
   scope: 'payment-processing',
   permissions: ['charge_card'],
-  authorization: ParafeClient.authorization.verified({
+  authorization: ParafeClient.authorization.attested({
     instruction: 'User confirmed payment of $247',
     platform: 'acme-payments',
-    userSignature: '<cryptographic proof>',
   }),
 });
 ```
@@ -157,14 +162,9 @@ ParafeClient.authorization.attested({
   timestamp: new Date().toISOString(), // Optional, defaults to now
 })
 
-// Verified — cryptographic proof of human approval
-ParafeClient.authorization.verified({
-  instruction: 'User confirmed $247 charge',
-  platform: 'acme-payments',
-  userSignature: '<base64 signature>',
-  timestamp: new Date().toISOString(), // Optional, defaults to now
-})
 ```
+
+`ParafeClient.authorization.verified()` is deprecated. The broker refuses `verified` with `400 verified_evidence_unverifiable`: it can't check a bare signature string, so it won't vouch for one. `verified` will require a user-signed AP2 mandate that the broker verifies. Until then, use `attested`, and note that a scope requiring `verified` can't be reached.
 
 ## Agent Lifecycle
 
@@ -245,17 +245,9 @@ prf_key_live_org_<64 hex chars>    # organization key
 
 Keys are shown **once** at creation and stored as SHA-256 hashes — they cannot be recovered. Use the Developer Portal to generate replacements.
 
-## Verifiable Digital Credentials (VDC)
+## Credential formats
 
-The broker returns all trust artifacts in dual format:
-
-| Artifact | JWT field | VDC field |
-|----------|-----------|-----------|
-| Agent credential | `credential` | `credential_vdc` |
-| Consent token | `consent_token.token` | `consent_token.token_vdc` |
-| Receipt | `signature` | `receipt_vdc` |
-
-The SDK works with the JWT fields. If you need W3C Verifiable Credential format (e.g., for interop with other trust frameworks), use the `_vdc` fields from the raw broker API response.
+Credentials and consent tokens are EdDSA-signed JWTs; receipts are signed JSON. The broker used to also return W3C-style `credential_vdc`, `consent_token.token_vdc` and `receipt_vdc` fields. They didn't verify with standard Verifiable Credential libraries, so they were removed on 2026-09-29. The planned standard format is the agent credential as an SD-JWT VC.
 
 ## Running Tests
 

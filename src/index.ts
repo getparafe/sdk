@@ -13,7 +13,7 @@
 import { generateKeyPair, signChallenge } from './crypto.js';
 import { encryptCredentials, decryptCredentials } from './credentials.js';
 import { request } from './http.js';
-import { ValidationError } from './errors.js';
+import { ValidationError, AuthError } from './errors.js';
 import * as jose from 'jose';
 import type {
   ParafeClientOptions,
@@ -87,6 +87,10 @@ const authorization = {
    * Verified authorization — cryptographic proof of human approval.
    * Timestamp defaults to now if omitted.
    * Note: output key is `user_signature` (snake_case) as expected by the broker.
+   *
+   * @deprecated The broker refuses `verified` with `400 verified_evidence_unverifiable`
+   * (S-48): it can't check a bare signature string. `verified` will require a
+   * user-signed AP2 mandate that the broker verifies. Use `attested` meanwhile.
    */
   verified(opts: {
     instruction: string;
@@ -160,7 +164,23 @@ function normalizeReceipt(raw: Record<string, unknown>): SessionReceipt {
     signedBy: raw.signed_by as string,
     issuedAt: raw.issued_at as string,
     signature: raw.signature as string,
+    issued: raw,
   };
+}
+
+/** JSON with object keys sorted, so two receipts compare by content, not key order. */
+function stableStringify(value: unknown): string {
+  return JSON.stringify(value, (_key, v) =>
+    v !== null && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : v
+  );
+}
+
+/** The readable fields of a receipt, without `issued`. */
+function receiptView(receipt: SessionReceipt): Omit<SessionReceipt, 'issued'> {
+  const { issued: _issued, ...view } = receipt;
+  return view;
 }
 
 function denormalizeReceipt(receipt: SessionReceipt): Record<string, unknown> {
@@ -582,9 +602,22 @@ export class ParafeClient {
     const pem = `-----BEGIN PUBLIC KEY-----\n${pemLines.join('\n')}\n-----END PUBLIC KEY-----`;
     const publicKey = await jose.importSPKI(pem, 'EdDSA');
 
-    const { payload } = await jose.jwtVerify(consentToken, publicKey, {
-      algorithms: ['EdDSA'],
-    });
+    // A bad signature or a foreign issuer throws. An expired token doesn't: jose
+    // checks the signature before the claims, so the payload on JWTExpired is
+    // authentic, and callers get { valid: false, expired: true } as documented.
+    let payload: jose.JWTPayload;
+    try {
+      ({ payload } = await jose.jwtVerify(consentToken, publicKey, {
+        algorithms: ['EdDSA'],
+        issuer: 'parafe-trust-broker',
+      }));
+    } catch (err) {
+      if (!(err instanceof jose.errors.JWTExpired) || err.payload.iss !== 'parafe-trust-broker') throw err;
+      payload = err.payload;
+    }
+    if (payload.token_type !== 'consent') {
+      throw new AuthError('Not a Parafe consent token', 'invalid_token');
+    }
 
     const now = new Date();
     const expiresAt = payload.exp ? new Date(payload.exp * 1000).toISOString() : '';
@@ -594,7 +627,9 @@ export class ParafeClient {
       valid: !expired,
       scope: (payload.scope as string) ?? '',
       permissions: (payload.permissions as string[]) ?? [],
-      exclusions: (payload.exclusions as string[]) ?? [],
+      // The broker signs this claim as `excluded`; `exclusions` is read too so a
+      // later claim rename doesn't silently report "nothing excluded".
+      exclusions: (payload.excluded as string[]) ?? (payload.exclusions as string[]) ?? [],
       sessionId: (payload.session_id as string) ?? '',
       expiresAt,
       expired,
@@ -680,9 +715,28 @@ export class ParafeClient {
 
   /**
    * Verify a session receipt's Ed25519 signature against the broker's public key.
+   *
+   * Sends `receipt.issued` (the receipt exactly as the broker issued it) when
+   * present, and reports tampering if the readable fields no longer match it.
+   * Receipts without `issued` (from SDK 0.3.1 or earlier) are rebuilt from the
+   * readable fields, as before.
    */
   async verifyReceipt(receipt: SessionReceipt): Promise<VerifyReceiptResult> {
-    // Convert camelCase receipt back to snake_case for the broker
+    let signed: Record<string, unknown>;
+    if (receipt.issued) {
+      if (stableStringify(receiptView(normalizeReceipt(receipt.issued))) !== stableStringify(receiptView(receipt))) {
+        return {
+          valid: false,
+          signedBy: null,
+          receiptId: (receipt.issued.receipt_id as string) ?? null,
+          tamperDetected: true,
+        };
+      }
+      signed = receipt.issued;
+    } else {
+      signed = denormalizeReceipt(receipt);
+    }
+
     const raw = await request<{
       valid: boolean;
       signed_by: string | null;
@@ -691,7 +745,7 @@ export class ParafeClient {
     }>(`${this.brokerUrl}/receipt/verify`, {
       ...this.httpOpts,
       method: 'POST',
-      body: { receipt: denormalizeReceipt(receipt) },
+      body: { receipt: signed },
     });
 
     return {

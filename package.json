@@ -1,6 +1,6 @@
 {
   "name": "@getparafe/sdk",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Official Node.js/TypeScript SDK for the Parafe Trust Broker",
   "author": "Parafe",
   "license": "MIT",
@@ -51,7 +51,7 @@
     "build:cjs": "tsc -p tsconfig.cjs.json",
     "build:types": "tsc -p tsconfig.types.json",
     "test": "node --experimental-vm-modules node_modules/.bin/jest",
-    "test:unit": "node --experimental-vm-modules node_modules/.bin/jest tests/crypto.test.ts tests/credentials.test.ts tests/agent-auth.test.ts",
+    "test:unit": "node --experimental-vm-modules node_modules/.bin/jest tests/crypto.test.ts tests/credentials.test.ts tests/agent-auth.test.ts tests/receipt-consent.test.ts",
     "test:integration": "node --experimental-vm-modules node_modules/.bin/jest tests/client.test.ts",
     "clean": "rm -rf dist/",
     "prepublishOnly": "npm run test:unit && npm run clean && npm run build"

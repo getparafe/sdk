@@ -228,6 +228,12 @@ export interface SessionReceipt {
   signedBy: string;
   issuedAt: string;
   signature: string;
+  /**
+   * The receipt exactly as the broker issued and signed it (snake_case). Pass
+   * this to `@getparafe/verify` or store it as evidence; the camelCase fields
+   * above are a convenience copy. Absent on receipts from SDK 0.3.1 or earlier.
+   */
+  issued?: Record<string, unknown>;
 }
 
 // ── verifyConsentLocally() ──
