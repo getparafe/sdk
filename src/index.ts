@@ -603,6 +603,9 @@ export class ParafeClient {
     let key: jose.KeyLike | ReturnType<typeof jose.createLocalJWKSet>;
     if (typeof keys === 'string') {
       // Legacy: the base64 SPKI Ed25519 key. Wrap in PEM headers directly; don't re-encode the DER.
+      if (jose.decodeProtectedHeader(consentToken).alg === 'ES256') {
+        throw new ValidationError('This token is ES256 (broker 2026-09-30+); the legacy Ed25519 key cannot verify it. Omit the key (the JWKS is fetched) or pass getJwks().', 'validation_error');
+      }
       const pemLines: string[] = [];
       for (let i = 0; i < keys.length; i += 64) pemLines.push(keys.slice(i, i + 64));
       key = await jose.importSPKI(`-----BEGIN PUBLIC KEY-----\n${pemLines.join('\n')}\n-----END PUBLIC KEY-----`, 'EdDSA');
