@@ -21,11 +21,12 @@ const parafe = new ParafeClient({
   apiKey: 'prf_key_live_...', // From the Parafe Developer Portal
 });
 
-// 2. Register your agent (once — generates Ed25519 key pair internally)
+// 2. Register your agent (once — generates its key pair internally)
 const agent = await parafe.register({
   name: 'my-travel-agent',       // lowercase alphanumeric + hyphens, 3–100 chars
   type: 'enterprise',             // 'personal' or 'enterprise'
   owner: 'Acme Corp',
+  keyAlgorithm: 'P-256',          // Optional: 'Ed25519' (default) or 'P-256' (ES256, the key type AP2 uses)
   scopePolicies: {               // Optional: declare what scopes this agent accepts
     'flight-rebooking': {
       permissions: ['read_bookings', 'search_alternatives', 'request_rebooking'],
@@ -35,7 +36,7 @@ const agent = await parafe.register({
     },
   },
 });
-// agent.agentId, agent.credential, agent.publicKey, agent.privateKey, ...
+// agent.agentId, agent.did, agent.credential, agent.credentialSdJwt, agent.publicKey, agent.privateKey, ...
 
 // 3. Save credentials to an encrypted file (AES-256-GCM + scrypt)
 await parafe.saveCredentials('./parafe-credentials.enc', 'your-passphrase');
@@ -112,25 +113,34 @@ await parafe.recordAction({
   consentToken: consentToken.token,
 });
 
-// Close the session — returns a signed receipt
+// Close the session — returns the signed receipt
 const receipt = await parafe.closeSession(sessionId);
+// receipt.receipt is the evidence: a compact JWS signed by the broker (ES256).
+// The other fields (receiptId, participants, consentTokens, session, ...) are decoded from it.
 
-// recordAction() and closeSession() authenticate as the loaded agent (its
-// credential): the broker only lets a session's participants record actions
-// as themselves and close it.
+// The other participant fetches the same receipt
+const same = await otherParafe.getReceipt(sessionId);
 
-// Independently verify the receipt
+// Verify it: with the broker, or offline against the broker's JWKS
 const verification = await parafe.verifyReceipt(receipt);
-// { valid: true, tamperDetected: false, signedBy: 'parafe-broker' }
-
-// The receipt exactly as the broker signed it (snake_case). Store this, or hand
-// it to @getparafe/verify; the camelCase fields are a convenience copy.
-const signedReceipt = receipt.issued;
+// { valid: true, tamperDetected: false, signedBy: 'did:web:api.parafe.ai', formatVersion: 2 }
+const offline = await parafe.verifyReceiptLocally(receipt);
 ```
 
-**What the receipt contains today:** both participants, the handshake, every consent token issued in the session (scope, permissions, authorization modality and evidence) and the session times, signed by the broker. It does **not** yet list the actions recorded with `recordAction()`, the consent tokens' exclusions, or the handshake `context`, and only the agent that closes the session receives it. Receipt v2 will change all of that.
+**Proof of possession.** Wherever the SDK authenticates as your agent with its credential (`handshake()`, `escalateScope()`, `recordAction()`, `closeSession()`, `getReceipt()`, `revokeAgent()`, `updateScopePolicies()`), it also signs a `Parafe-PoP` proof with the agent's private key, bound to that request. A leaked credential is useless on its own. Nothing to do on your side.
 
-> For third parties who receive a Parafe receipt but don't want the full SDK, [`@getparafe/verify`](https://github.com/getparafe/verify) is a minimal standalone package that offers the same offline verification for credentials, consent tokens, and receipts. Give it `receipt.issued`. No Parafe account required; works in Node and browsers.
+**Key-bound consent tokens.** A consent token names the initiator (`sub`), the target (`aud`, its DID) and the initiator's key (`cnf.jkt`). When you present one to a target, attach a presentation proof so it can check you hold that key:
+
+```typescript
+const proof = await parafe.createPresentationProof(consentToken.token, a2aMessageId);
+// Target side: verify it with the broker, or offline with @getparafe/a2a-extension
+await target.verifyConsent({ consentToken: token, action: 'read_bookings', sessionId, presentationProof: proof });
+// { valid: true, permitted: true, keyBound: true, proofVerified: true }
+```
+
+**What the receipt contains:** both participants (agent ID, DID, assurance, tier), mutual authentication and a hash of the handshake `context`, every consent token issued in the session (a hash of the token, scope, permissions, **exclusions**, authorization modality, a hash of the human's instruction rather than its text, and how the initiator proved itself: `pop` or `credential`), and the session times and who closed it. It does **not** yet list the actions recorded with `recordAction()`: per-action receipts come next (Phase 2).
+
+> For third parties who receive a Parafe receipt but don't want the full SDK, [`@getparafe/verify`](https://github.com/getparafe/verify) is a minimal standalone package that offers the same offline verification for credentials, consent tokens, and receipts. Give it `receipt.receipt` (the JWS). No Parafe account required; works in Node and browsers.
 
 ## Scope Escalation
 
@@ -172,7 +182,9 @@ ParafeClient.authorization.attested({
 // Revoke an agent
 await parafe.revokeAgent('prf_agent_...');
 
-// Renew credential to pick up org's current verification tier
+// Renew the credential: re-issued when the owner's tier changed, or it is expired
+// or within 7 days of expiry. Without an API key, the loaded agent renews itself
+// (credential + proof of possession).
 await parafe.renewCredential('prf_agent_...');
 
 // Update scope policies
@@ -247,7 +259,13 @@ Keys are shown **once** at creation and stored as SHA-256 hashes — they cannot
 
 ## Credential formats
 
-Credentials and consent tokens are EdDSA-signed JWTs; receipts are signed JSON. The broker used to also return W3C-style `credential_vdc`, `consent_token.token_vdc` and `receipt_vdc` fields. They didn't verify with standard Verifiable Credential libraries, so they were removed on 2026-09-29. The planned standard format is the agent credential as an SD-JWT VC.
+Since 2026-09-30 the broker signs with ES256 and publishes its keys at `/.well-known/jwks.json`; every token names its key (`kid`). `getJwks()` fetches them (cached), and `verifyConsentLocally()` uses them. Tokens and v1 receipts from before are Ed25519 and still verify (`getPublicKey()` returns that retired key).
+
+- **Credential:** a JWT, plus (`credentialSdJwt`) the same identity as an **SD-JWT VC** that binds the agent's key (`cnf.jwk`), with `owner`/`owner_id` selectively disclosable and `org_domain` for domain-verified orgs.
+- **Consent token (v2):** a JWT with `sub`, `aud`, `cnf.jkt`, `jti`, `exclusions` and `initiator_proof`.
+- **Receipt (v2):** a compact JWS (`typ: parafe-session-receipt+jwt`). v1 receipts (signed JSON) still verify: `getReceipt()` returns them as `{ formatVersion: 1, issued }`.
+
+The broker used to also return W3C-style `*_vdc` fields; they didn't verify with standard VC libraries and were removed on 2026-09-29.
 
 ## Running Tests
 

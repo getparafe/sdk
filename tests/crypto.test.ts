@@ -101,3 +101,26 @@ describe('signChallenge', () => {
     expect(valid).toBe(false);
   });
 });
+
+// ─── A2: P-256 (ES256) agent keys ────────────────────────────────────────────
+
+import * as nodeCryptoP256 from 'node:crypto';
+import { generateKeyPair as genKeyPair, signChallenge as signNonce } from '../src/crypto.js';
+
+describe('P-256 agent keys (A2)', () => {
+  it('generateKeyPair("P-256") returns an EC P-256 SPKI/PKCS8 pair', () => {
+    const { publicKey } = genKeyPair('P-256');
+    const key = nodeCryptoP256.createPublicKey({ key: Buffer.from(publicKey, 'base64'), format: 'der', type: 'spki' });
+    expect(key.asymmetricKeyType).toBe('ec');
+    expect(key.asymmetricKeyDetails?.namedCurve).toBe('prime256v1');
+  });
+
+  it('signChallenge signs ECDSA/SHA-256 as raw r||s (64 bytes) that verifies', () => {
+    const { publicKey, privateKey } = genKeyPair('P-256');
+    const nonce = nodeCryptoP256.randomBytes(32).toString('hex');
+    const sig = Buffer.from(signNonce(nonce, privateKey), 'base64');
+    expect(sig.length).toBe(64);
+    const key = nodeCryptoP256.createPublicKey({ key: Buffer.from(publicKey, 'base64'), format: 'der', type: 'spki' });
+    expect(nodeCryptoP256.verify('sha256', Buffer.from(nonce, 'hex'), { key, dsaEncoding: 'ieee-p1363' }, sig)).toBe(true);
+  });
+});

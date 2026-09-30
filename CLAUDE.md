@@ -6,7 +6,7 @@ Official Node.js/TypeScript SDK for the Parafe Trust Broker. Published on npm as
 
 - `src/index.ts` — Main `ParafeClient` class. All broker API methods (registration, handshake, consent, receipts, metrics).
 - `src/http.ts` — HTTP client with retry logic (502/503/504), exponential backoff, AbortController timeouts.
-- `src/crypto.ts` — Ed25519 key generation (SPKI DER public, PKCS8 DER private), challenge signing.
+- `src/crypto.ts` — Agent key generation (Ed25519 or P-256; SPKI DER public, PKCS8 DER private), challenge signing, proof-of-possession JWTs (`signProof`, `createPresentationProof`).
 - `src/credentials.ts` — Credential encryption at rest via AES-256-GCM. Save/load from disk.
 - `src/errors.ts` — Error class hierarchy (`ParafeError` → `AuthError`, `ForbiddenError`, `NotFoundError`, etc.).
 - `src/types.ts` — TypeScript type definitions for all broker API types.
@@ -25,13 +25,15 @@ npm test               # Jest tests
 - **Dual module output** — Builds to both CJS (`dist/cjs/`) and ESM (`dist/esm/`) via separate tsconfig files. `package.json` has `main` (CJS), `module` (ESM), and `types` exports.
 - **snake_case → camelCase** — Broker API uses snake_case. SDK normalizes everything to camelCase for TypeScript consumers. This happens consistently in `index.ts`.
 - **Credential encryption** — `credentials.ts` uses AES-256-GCM with a passphrase-derived key. Credentials are encrypted before writing to disk, decrypted on load.
-- **SPKI PEM construction** — `index.ts:560-567` wraps base64 SPKI DER in PEM headers for `verifyConsentLocally`. There is an explicit comment not to re-encode — this is correct and intentional.
+- **Broker keys** — `verifyConsentLocally` and `verifyReceiptLocally` resolve broker keys from the JWKS (`getJwks()`, cached 5 min, falls back to `/public-key` on a pre-2026-09-30 broker). The legacy base64 SPKI key is still accepted; it's wrapped in PEM headers without re-encoding.
+- **Proof of possession (0.4.0)** — every call that authenticates with the agent's credential also sends a `Parafe-PoP` header signed with its key (`proofHeader`/`agentHttpOpts`). Keep this for any new credential-authenticated method.
+- **Receipts are JWS (0.4.0)** — `SessionReceipt.receipt` is the evidence; the rest is decoded from it. Never rebuild or re-serialize a receipt.
 - **Retry logic** — `http.ts` retries on 502/503/504 with exponential backoff (200ms * 2^attempt). Other errors fail immediately.
 
 ## When Making Changes
 
 - If adding a new broker API method, add it to `ParafeClient` in `index.ts`, add types to `types.ts`, and add tests.
 - Maintain snake_case → camelCase normalization for any new response types.
-- The `verifyConsentLocally` method does offline Ed25519 verification — test carefully if modifying crypto paths.
+- The `verifyConsentLocally` method does offline ES256/EdDSA verification — test carefully if modifying crypto paths.
 - Run `npm test` and `npm run build` before pushing. Published via GitHub Actions on release.
 - This SDK is a dependency of `@getparafe/mcp-server`. `@getparafe/a2a-extension` does not depend on it (only `jose`), but its docs show the two used together. Breaking changes affect downstream packages.

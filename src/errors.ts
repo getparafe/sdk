@@ -85,7 +85,7 @@ export class NetworkError extends ParafeError {
  */
 export function mapBrokerError(statusCode: number, body: Record<string, unknown>): ParafeError {
   const code = (body.error as string) || 'unknown_error';
-  const message = (body.message as string) || (body.error as string) || 'Unknown error';
+  const message = (body.message as string) || (body.reason as string) || (body.error as string) || 'Unknown error';
 
   switch (statusCode) {
     case 400:

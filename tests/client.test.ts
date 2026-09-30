@@ -318,55 +318,71 @@ describe('Full integration flow', () => {
     expect(result.action).toBe('read_data');
   });
 
+  test('verifyConsentLocally() — verifies against the broker JWKS; the token is key-bound', async () => {
+    const local = await targetClient.verifyConsentLocally(consentToken);
+    expect(local.valid).toBe(true);
+    expect(local.initiatorAgentId).toBe(initiatorAgentId);
+    expect(local.keyThumbprint).toBeTruthy();
+    expect(local.initiatorProof).toBe('pop');
+  });
+
+  test('verifyConsent() with a presentation proof — the broker checks it against cnf.jkt', async () => {
+    const proof = await initiatorClient.createPresentationProof(consentToken, 'msg-1');
+    const result = await targetClient.verifyConsent({ consentToken, action: 'read_data', sessionId, presentationProof: proof });
+    expect(result.permitted).toBe(true);
+    expect(result.keyBound).toBe(true);
+    expect(result.proofVerified).toBe(true);
+    // A proof by another agent's key is refused.
+    const forged = await targetClient.createPresentationProof(consentToken);
+    await expect(targetClient.verifyConsent({ consentToken, action: 'read_data', sessionId, presentationProof: forged })).rejects.toThrow();
+  });
+
   // ── 8. Close session ──────────────────────────────────────────────────────
 
-  test('closeSession() — returns signed receipt', async () => {
+  test('closeSession() — returns the signed receipt (a JWS) and its decoded view', async () => {
     const result = await initiatorClient.closeSession(sessionId);
 
+    expect(result.formatVersion).toBe(2);
     expect(result.receiptId).toMatch(/^rcpt_/);
     expect(result.sessionId).toBe(sessionId);
-    expect(typeof result.signature).toBe('string');
-    expect(result.signedBy).toBe('parafe-broker');
+    expect(result.receipt.split('.')).toHaveLength(3);
+    expect(result.issuer).toMatch(/^did:web:/);
     expect(result.participants.initiator.agentId).toBe(initiatorAgentId);
     expect(result.participants.target.agentId).toBe(targetAgentId);
-    // B3: the receipt as the broker issued it, for @getparafe/verify and storage
-    expect(result.issued?.receipt_id).toBe(result.receiptId);
-    expect(result.issued?.signature).toBe(result.signature);
+    expect(result.session.closedBy).toBe(initiatorAgentId);
+    expect(result.consentTokens[0].initiatorProof).toBe('pop');
 
     receipt = result as unknown as Record<string, unknown>;
   });
 
+  test('getReceipt() — the target gets the identical receipt (B5)', async () => {
+    const got = await targetClient.getReceipt(sessionId);
+    expect(got.formatVersion).toBe(2);
+    expect((got as import('../src/types.js').SessionReceipt).receipt).toBe((receipt as { receipt: string }).receipt);
+  });
+
   // ── 9. Verify receipt ─────────────────────────────────────────────────────
 
-  test('verifyReceipt() — valid receipt', async () => {
-    // Need to import the SessionReceipt type — use the receipt object we got
-    const result = await initiatorClient.verifyReceipt(
-      receipt as Parameters<typeof initiatorClient.verifyReceipt>[0]
-    );
-
+  test('verifyReceipt() / verifyReceiptLocally() — valid receipt', async () => {
+    const typed = receipt as unknown as import('../src/types.js').SessionReceipt;
+    const result = await initiatorClient.verifyReceipt(typed);
     expect(result.valid).toBe(true);
     expect(result.tamperDetected).toBe(false);
-    expect(result.signedBy).toBe('parafe-broker');
+    expect(result.signedBy).toMatch(/^did:web:/);
+    expect((await initiatorClient.verifyReceiptLocally(typed)).valid).toBe(true);
   });
 
   test('verifyReceipt() — tampered receipt returns tamper_detected=true', async () => {
-    const receiptTyped = receipt as unknown as import('../src/types.js').SessionReceipt;
-    const tampered = {
-      ...receiptTyped,
-      participants: {
-        ...receiptTyped.participants,
-        initiator: {
-          ...receiptTyped.participants.initiator,
-          agentName: 'tampered-name',
-        },
-      },
-    };
+    const jws = (receipt as { receipt: string }).receipt;
+    const [h, p, sig] = jws.split('.');
+    const claims = JSON.parse(Buffer.from(p, 'base64url').toString());
+    claims.participants.initiator.agent_name = 'tampered-name';
+    const tampered = `${h}.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.${sig}`;
 
-    const result = await initiatorClient.verifyReceipt(
-      tampered as Parameters<typeof initiatorClient.verifyReceipt>[0]
-    );
+    const result = await initiatorClient.verifyReceipt(tampered);
     expect(result.valid).toBe(false);
     expect(result.tamperDetected).toBe(true);
+    expect((await initiatorClient.verifyReceiptLocally(tampered)).valid).toBe(false);
   });
 
   // ── 10. Scope escalation ─────────────────────────────────────────────────
@@ -417,6 +433,19 @@ describe('Full integration flow', () => {
 
     // Close the session
     await iniClient.closeSession(completed.sessionId);
+  });
+
+  test('a P-256 agent (A2) runs the whole flow', async () => {
+    const ini = makeClient();
+    const tgt = makeClient();
+    const iniReg = await ini.register({ name: uniqueName('sdk-p256-ini'), type: 'enterprise', owner: 'SDK Test Suite', keyAlgorithm: 'P-256' });
+    expect(iniReg.credentialSdJwt).toBeTruthy();
+    const tgtReg = await tgt.register({ name: uniqueName('sdk-p256-tgt'), type: 'enterprise', owner: 'SDK Test Suite', keyAlgorithm: 'P-256', scopePolicies: { s: { permissions: ['read'], minimum_initiator_proof: 'pop' } } });
+    const hs = await ini.handshake({ targetAgentId: tgtReg.agentId, scope: 's', permissions: ['read'] });
+    const done = await tgt.completeHandshake({ handshakeId: hs.handshakeId, challengeNonce: hs.challengeForTarget });
+    expect(done.consentToken.initiatorProof).toBe('pop');
+    const r = await tgt.closeSession(done.sessionId);
+    expect((await ini.verifyReceiptLocally(r)).valid).toBe(true);
   });
 
   // ── 11. updateScopePolicies() ────────────────────────────────────────────

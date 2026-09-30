@@ -10,10 +10,10 @@
  *   });
  */
 
-import { generateKeyPair, signChallenge } from './crypto.js';
+import { generateKeyPair, signChallenge, signProof, createPresentationProof } from './crypto.js';
 import { encryptCredentials, decryptCredentials } from './credentials.js';
 import { request } from './http.js';
-import { ValidationError, AuthError } from './errors.js';
+import { ValidationError, AuthError, NotFoundError, ParafeError } from './errors.js';
 import * as jose from 'jose';
 import type {
   ParafeClientOptions,
@@ -36,6 +36,7 @@ import type {
   RecordActionOptions,
   RecordActionResult,
   SessionReceipt,
+  LegacySessionReceipt,
   VerifyReceiptResult,
   RevokeAgentResult,
   RenewCredentialResult,
@@ -43,13 +44,15 @@ import type {
   AgentMetrics,
   VerifyConsentLocalResult,
   BrokerPublicKey,
+  BrokerJwks,
 } from './types.js';
 
 // Re-export everything consumers need
 export { ValidationError, AuthError, ForbiddenError, NotFoundError,
          ConflictError, ExpiredError, RateLimitError, InternalError,
          NetworkError, ParafeError } from './errors.js';
-export { generateKeyPair, signChallenge } from './crypto.js';
+export { generateKeyPair, signChallenge, signProof, createPresentationProof, publicKeyThumbprint } from './crypto.js';
+export type { KeyAlgorithm, KeyPair } from './crypto.js';
 export * from './types.js';
 
 // ─── Authorization helpers ────────────────────────────────────────────────────
@@ -119,111 +122,78 @@ const authorization = {
   },
 };
 
-// ─── Receipt normalization helpers ────────────────────────────────────────────
+// ─── Receipt helpers ──────────────────────────────────────────────────────────
 
-function normalizeParticipant(raw: Record<string, unknown>): import('./types.js').ReceiptParticipant {
+const RECEIPT_TYP = 'parafe-session-receipt+jwt';
+
+function participantView(raw: Record<string, unknown> = {}): import('./types.js').ReceiptParticipant {
   return {
     agentId: raw.agent_id as string,
+    did: raw.did as string | undefined,
     agentName: raw.agent_name as string,
     identityAssurance: raw.identity_assurance as string,
+    verificationTier: raw.verification_tier as string | undefined,
   };
 }
 
-function normalizeReceipt(raw: Record<string, unknown>): SessionReceipt {
-  const participants = raw.participants as Record<string, Record<string, unknown>>;
-  const handshake = raw.handshake as Record<string, unknown>;
-  const session = raw.session as Record<string, unknown>;
-  const consentTokens = (raw.consent_tokens as Record<string, unknown>[]) ?? [];
-
+/** Decode a v2 receipt JWS into the read-only view. Does not verify it. */
+export function decodeReceipt(jws: string): SessionReceipt {
+  const c = jose.decodeJwt(jws) as Record<string, unknown>;
+  const participants = (c.participants ?? {}) as Record<string, Record<string, unknown>>;
+  const handshake = (c.handshake ?? {}) as Record<string, unknown>;
+  const session = (c.session ?? {}) as Record<string, unknown>;
+  const tokens = (c.consent_tokens as Record<string, unknown>[]) ?? [];
   return {
-    receiptId: raw.receipt_id as string,
-    sessionId: raw.session_id as string,
-    handshakeId: raw.handshake_id as string,
+    formatVersion: 2,
+    receipt: jws,
+    receiptId: c.receipt_id as string,
+    sessionId: c.session_id as string,
+    handshakeId: c.handshake_id as string,
+    issuer: c.iss as string,
+    issuedAt: typeof c.iat === 'number' ? new Date(c.iat * 1000).toISOString() : '',
     participants: {
-      initiator: normalizeParticipant(participants.initiator),
-      target: normalizeParticipant(participants.target),
+      initiator: participantView(participants.initiator),
+      target: participantView(participants.target),
     },
     handshake: {
-      handshakeId: handshake.handshake_id as string,
       mutualAuthCompleted: handshake.mutual_auth_completed as boolean,
       completedAt: handshake.completed_at as string,
+      contextHash: (handshake.context_hash as string) ?? null,
     },
-    consentTokens: consentTokens.map(ct => ({
-      scope: ct.scope as string,
-      permissions: ct.permissions as string[],
-      exclusions: (ct.exclusions as string[]) ?? (ct.excluded as string[]) ?? [],
-      authorization: ct.authorization as Authorization,
-      issuedAt: ct.issued_at as string,
-      expiredAt: ct.expired_at as string,
-    })),
+    consentTokens: tokens.map((ct) => {
+      const auth = (ct.authorization ?? {}) as Record<string, unknown>;
+      return {
+        tokenRef: (ct.token_ref as string) ?? null,
+        scope: ct.scope as string,
+        permissions: (ct.permissions as string[]) ?? [],
+        exclusions: (ct.exclusions as string[]) ?? [],
+        authorization: {
+          modality: auth.modality as Authorization['modality'],
+          evidenceHash: (auth.evidence_hash as string) ?? null,
+          mandateRefs: (auth.mandate_refs as string[]) ?? [],
+        },
+        initiatorProof: (ct.initiator_proof as 'pop' | 'credential') ?? null,
+        initiatorProofAt: (ct.initiator_proof_at as string) ?? null,
+        issuedAt: ct.issued_at as string,
+        expiresAt: ct.expires_at as string,
+      };
+    }),
+    actions: (c.actions as unknown[]) ?? [],
+    chainHead: (c.chain_head as string) ?? null,
     session: {
       startedAt: session.started_at as string,
       closedAt: session.closed_at as string,
+      closedBy: (session.closed_by as string) ?? null,
       status: session.status as string,
     },
-    signedBy: raw.signed_by as string,
-    issuedAt: raw.issued_at as string,
-    signature: raw.signature as string,
-    issued: raw,
+    claims: c,
   };
 }
 
-/** JSON with object keys sorted, so two receipts compare by content, not key order. */
-function stableStringify(value: unknown): string {
-  return JSON.stringify(value, (_key, v) =>
-    v !== null && typeof v === 'object' && !Array.isArray(v)
-      ? Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
-      : v
-  );
-}
-
-/** The readable fields of a receipt, without `issued`. */
-function receiptView(receipt: SessionReceipt): Omit<SessionReceipt, 'issued'> {
-  const { issued: _issued, ...view } = receipt;
-  return view;
-}
-
-function denormalizeReceipt(receipt: SessionReceipt): Record<string, unknown> {
-  return {
-    receipt_id: receipt.receiptId,
-    session_id: receipt.sessionId,
-    handshake_id: receipt.handshakeId,
-    participants: {
-      initiator: {
-        agent_id: receipt.participants.initiator.agentId,
-        agent_name: receipt.participants.initiator.agentName,
-        identity_assurance: receipt.participants.initiator.identityAssurance,
-      },
-      target: {
-        agent_id: receipt.participants.target.agentId,
-        agent_name: receipt.participants.target.agentName,
-        identity_assurance: receipt.participants.target.identityAssurance,
-      },
-    },
-    handshake: {
-      handshake_id: receipt.handshake.handshakeId,
-      mutual_auth_completed: receipt.handshake.mutualAuthCompleted,
-      completed_at: receipt.handshake.completedAt,
-    },
-    consent_tokens: receipt.consentTokens.map(ct => ({
-      // Broker's signed receipt (broker/src/routes/receipt.js buildReceipt) does NOT
-      // include an "excluded" field. Adding one here breaks signature verification
-      // on round-trip, so we omit it.
-      scope: ct.scope,
-      permissions: ct.permissions,
-      authorization: ct.authorization,
-      issued_at: ct.issuedAt,
-      expired_at: ct.expiredAt,
-    })),
-    session: {
-      started_at: receipt.session.startedAt,
-      closed_at: receipt.session.closedAt,
-      status: receipt.session.status,
-    },
-    signed_by: receipt.signedBy,
-    issued_at: receipt.issuedAt,
-    signature: receipt.signature,
-  };
+function receiptFromResponse(raw: Record<string, unknown>): SessionReceipt | LegacySessionReceipt {
+  if (typeof raw.receipt === 'string') return decodeReceipt(raw.receipt);
+  const issued = (raw.receipt ?? raw) as Record<string, unknown>;
+  return { formatVersion: 1, receiptId: issued.receipt_id as string, sessionId: issued.session_id as string, issued };
 }
 
 // ─── ParafeClient ─────────────────────────────────────────────────────────────
@@ -257,15 +227,29 @@ export class ParafeClient {
   }
 
   /**
-   * Request options that authenticate as the loaded agent (its credential),
-   * for broker routes that act on a session as one of its participants
-   * (recording actions, closing). Falls back to the API key when no credential
-   * is loaded, or when acting for a different agent than the loaded one.
+   * A proof of possession for a request (B7): the `Parafe-PoP` header, signed
+   * with the loaded agent's key and bound to what the request authorizes.
    */
-  private agentHttpOpts(agentId?: string) {
+  private async proofHeader(method: string, url: string, claims: Record<string, unknown>): Promise<Record<string, string>> {
+    const creds = this.requireCredentials();
+    const htu = url.split('?')[0];
+    return { 'Parafe-PoP': await signProof(creds.privateKey, { htm: method, htu, ...claims }) };
+  }
+
+  /**
+   * Request options that authenticate as the loaded agent: its credential plus a
+   * proof of possession (B7). For broker routes that act as one participant
+   * (recording, closing, fetching a receipt) or on the agent itself. Falls back
+   * to the API key when no credential is loaded, or when acting for a different
+   * agent than the loaded one.
+   */
+  private async agentHttpOpts(method: string, url: string, claims: Record<string, unknown>, agentId?: string) {
     const creds = this.credentials;
     if (creds && (!agentId || creds.agentId === agentId)) {
-      return { ...this.httpOpts, headers: { Authorization: `Bearer ${creds.credential}` } };
+      return {
+        ...this.httpOpts,
+        headers: { Authorization: `Bearer ${creds.credential}`, ...(await this.proofHeader(method, url, claims)) },
+      };
     }
     return this.httpOpts;
   }
@@ -290,10 +274,10 @@ export class ParafeClient {
    * Call `saveCredentials()` immediately after registration to persist it securely.
    */
   async register(opts: RegisterOptions): Promise<RegisterResult> {
-    const { name, type, owner, scopePolicies } = opts;
+    const { name, type, owner, scopePolicies, keyAlgorithm } = opts;
 
-    // Generate key pair
-    const { publicKey, privateKey } = generateKeyPair();
+    // Generate key pair (Ed25519 by default; P-256 for AP2 interop)
+    const { publicKey, privateKey } = generateKeyPair(keyAlgorithm ?? 'Ed25519');
 
     // Build request body (broker uses snake_case)
     const body: Record<string, unknown> = {
@@ -309,12 +293,14 @@ export class ParafeClient {
     // POST /agents/register
     const raw = await request<{
       agent_id: string;
+      did?: string;
       agent_name: string;
       agent_type: string;
       owner: string;
       identity_assurance: string;
       verification_tier: string;
       credential: string;
+      credential_sd_jwt?: string;
       issued_at: string;
       expires_at: string;
     }>(`${this.brokerUrl}/agents/register`, {
@@ -328,6 +314,7 @@ export class ParafeClient {
       agentId: raw.agent_id,
       agentName: raw.agent_name,
       credential: raw.credential,
+      credentialSdJwt: raw.credential_sd_jwt,
       publicKey,
       privateKey,
       issuedAt: raw.issued_at,
@@ -336,7 +323,9 @@ export class ParafeClient {
 
     return {
       agentId: raw.agent_id,
+      did: raw.did,
       credential: raw.credential,
+      credentialSdJwt: raw.credential_sd_jwt,
       publicKey,
       privateKey,
       verificationTier: raw.verification_tier,
@@ -418,12 +407,14 @@ export class ParafeClient {
       body.context = opts.context;
     }
 
+    const url = `${this.brokerUrl}/handshake/initiate`;
     const raw = await request<{
       handshake_id: string;
       challenge_for_target: string;
       expires_at: string;
-    }>(`${this.brokerUrl}/handshake/initiate`, {
+    }>(url, {
       ...this.httpOpts,
+      headers: { ...this.httpOpts.headers, ...(await this.proofHeader('POST', url, { target_agent_id: opts.targetAgentId, requested_scope: opts.scope })) },
       method: 'POST',
       body,
     });
@@ -459,6 +450,7 @@ export class ParafeClient {
         session_id: string;
         issued_at: string;
         expires_at: string;
+        initiator_proof?: 'pop' | 'credential' | null;
       };
     }>(`${this.brokerUrl}/handshake/complete`, {
       ...this.httpOpts,
@@ -480,6 +472,7 @@ export class ParafeClient {
       sessionId: ct.session_id,
       issuedAt: ct.issued_at,
       expiresAt: ct.expires_at,
+      initiatorProof: ct.initiator_proof ?? null,
     };
 
     return {
@@ -510,6 +503,7 @@ export class ParafeClient {
       body.authorization = opts.authorization;
     }
 
+    const url = `${this.brokerUrl}/handshake/initiate`;
     const raw = await request<{
       session_id: string;
       consent_token: {
@@ -521,9 +515,11 @@ export class ParafeClient {
         session_id: string;
         issued_at: string;
         expires_at: string;
+        initiator_proof?: 'pop' | 'credential' | null;
       };
-    }>(`${this.brokerUrl}/handshake/initiate`, {
+    }>(url, {
       ...this.httpOpts,
+      headers: { ...this.httpOpts.headers, ...(await this.proofHeader('POST', url, { target_agent_id: opts.targetAgentId, requested_scope: opts.scope, session_id: opts.sessionId })) },
       method: 'POST',
       body,
     });
@@ -538,6 +534,7 @@ export class ParafeClient {
       sessionId: ct.session_id,
       issuedAt: ct.issued_at,
       expiresAt: ct.expires_at,
+      initiatorProof: ct.initiator_proof ?? null,
     };
 
     return {
@@ -559,6 +556,8 @@ export class ParafeClient {
       session_id: string;
       expires_at?: string;
       reason?: string;
+      key_bound?: boolean;
+      proof_verified?: boolean;
     }>(`${this.brokerUrl}/consent/verify`, {
       ...this.httpOpts,
       method: 'POST',
@@ -566,6 +565,7 @@ export class ParafeClient {
         consent_token: opts.consentToken,
         action: opts.action,
         session_id: opts.sessionId,
+        ...(opts.presentationProof ? { proof: opts.presentationProof } : {}),
       },
     });
 
@@ -576,39 +576,47 @@ export class ParafeClient {
       sessionId: raw.session_id,
       expiresAt: raw.expires_at,
       reason: raw.reason,
+      keyBound: raw.key_bound,
+      proofVerified: raw.proof_verified,
     };
   }
 
   // ── Local consent verification ──────────────────────────────────────────────
 
   /**
-   * Verify a consent token locally without a broker round-trip.
-   * Decodes the JWT, verifies the Ed25519 signature against the broker's public key,
-   * and checks expiration, scope, and permissions.
+   * Verify a consent token locally without a broker round-trip: the broker's
+   * signature (resolved by `kid` from the broker's JWKS; ES256 since 2026-09-30,
+   * EdDSA before), the issuer, expiry, scope and permissions.
    *
-   * Requires the broker's public key (fetch once via `getPublicKey()` and cache it).
+   * `keys` is optional: the broker's JWKS from `getJwks()` (fetched and cached
+   * when omitted), or the legacy base64 Ed25519 key from `getPublicKey()` for
+   * tokens issued before 2026-09-30.
+   *
+   * This checks the token, not who presents it. A target receiving a key-bound
+   * token should also check the initiator's presentation proof (the A2A
+   * extension does), or pass it to `verifyConsent({ presentationProof })`.
    */
   async verifyConsentLocally(
     consentToken: string,
-    brokerPublicKeyBase64: string
+    keys?: BrokerJwks | string
   ): Promise<VerifyConsentLocalResult> {
-    // Convert base64 SPKI DER to PEM format for jose.importSPKI()
-    // The broker returns the key as base64-encoded SPKI DER — wrap in PEM headers directly.
-    // Do NOT decode and re-encode, as that would double-encode the DER structure.
-    const pemLines: string[] = [];
-    for (let i = 0; i < brokerPublicKeyBase64.length; i += 64) {
-      pemLines.push(brokerPublicKeyBase64.slice(i, i + 64));
+    let key: jose.KeyLike | ReturnType<typeof jose.createLocalJWKSet>;
+    if (typeof keys === 'string') {
+      // Legacy: the base64 SPKI Ed25519 key. Wrap in PEM headers directly; don't re-encode the DER.
+      const pemLines: string[] = [];
+      for (let i = 0; i < keys.length; i += 64) pemLines.push(keys.slice(i, i + 64));
+      key = await jose.importSPKI(`-----BEGIN PUBLIC KEY-----\n${pemLines.join('\n')}\n-----END PUBLIC KEY-----`, 'EdDSA');
+    } else {
+      key = jose.createLocalJWKSet((keys ?? (await this.getJwks())) as unknown as jose.JSONWebKeySet);
     }
-    const pem = `-----BEGIN PUBLIC KEY-----\n${pemLines.join('\n')}\n-----END PUBLIC KEY-----`;
-    const publicKey = await jose.importSPKI(pem, 'EdDSA');
 
     // A bad signature or a foreign issuer throws. An expired token doesn't: jose
     // checks the signature before the claims, so the payload on JWTExpired is
     // authentic, and callers get { valid: false, expired: true } as documented.
     let payload: jose.JWTPayload;
     try {
-      ({ payload } = await jose.jwtVerify(consentToken, publicKey, {
-        algorithms: ['EdDSA'],
+      ({ payload } = await jose.jwtVerify(consentToken, key as never, {
+        algorithms: ['ES256', 'EdDSA'],
         issuer: 'parafe-trust-broker',
       }));
     } catch (err) {
@@ -622,25 +630,66 @@ export class ParafeClient {
     const now = new Date();
     const expiresAt = payload.exp ? new Date(payload.exp * 1000).toISOString() : '';
     const expired = payload.exp ? now.getTime() > payload.exp * 1000 : false;
+    const cnf = payload.cnf as { jkt?: string } | undefined;
 
     return {
       valid: !expired,
       scope: (payload.scope as string) ?? '',
       permissions: (payload.permissions as string[]) ?? [],
-      // The broker signs this claim as `excluded`; `exclusions` is read too so a
-      // later claim rename doesn't silently report "nothing excluded".
-      exclusions: (payload.excluded as string[]) ?? (payload.exclusions as string[]) ?? [],
+      // Consent token v2 names the claim `exclusions`; before, `excluded`. Read both.
+      exclusions: (payload.exclusions as string[]) ?? (payload.excluded as string[]) ?? [],
       sessionId: (payload.session_id as string) ?? '',
       expiresAt,
       expired,
+      initiatorAgentId: (payload.sub as string) ?? (payload.initiator_agent_id as string | undefined),
+      audience: typeof payload.aud === 'string' ? payload.aud : undefined,
+      keyThumbprint: cnf?.jkt ?? null,
+      initiatorProof: (payload.initiator_proof as 'pop' | 'credential') ?? null,
+      tokenId: payload.jti,
     };
   }
 
-  // ── Broker public key ──────────────────────────────────────────────────────
+  /**
+   * The presentation proof to send beside a consent token (B7): signed with the
+   * loaded agent's key, bound to this token (`ath`), the target (`aud` = the
+   * token's audience, the target's DID) and optionally the A2A message ID.
+   */
+  async createPresentationProof(consentToken: string, messageId?: string): Promise<string> {
+    const creds = this.requireCredentials();
+    const aud = jose.decodeJwt(consentToken).aud;
+    if (typeof aud !== 'string') {
+      throw new ValidationError('This consent token has no audience (issued before key binding); no proof is needed', 'validation_error');
+    }
+    return createPresentationProof(creds.privateKey, consentToken, aud, messageId);
+  }
+
+  // ── Broker keys ────────────────────────────────────────────────────────────
+
+  private jwksCache: { value: BrokerJwks; fetchedAt: number } | null = null;
 
   /**
-   * Fetch the broker's Ed25519 public key for local consent token verification.
-   * Cache the result — the broker's key pair does not change frequently.
+   * The broker's signing keys (JWKS): the active ES256 key and retired keys.
+   * Cached for 5 minutes. Match a JWS's `kid` against it.
+   */
+  async getJwks(): Promise<BrokerJwks> {
+    if (this.jwksCache && Date.now() - this.jwksCache.fetchedAt < 5 * 60 * 1000) return this.jwksCache.value;
+    let value: BrokerJwks;
+    try {
+      value = await request<BrokerJwks>(`${this.brokerUrl}/.well-known/jwks.json`, { ...this.httpOpts, method: 'GET' });
+    } catch (err) {
+      // A broker from before 2026-09-30 has no JWKS: use its single Ed25519 key.
+      if (!(err instanceof NotFoundError)) throw err;
+      const legacy = await this.getPublicKey();
+      const spki = Buffer.from(legacy.publicKey, 'base64');
+      value = { keys: [{ kty: 'OKP', crv: 'Ed25519', x: spki.subarray(12).toString('base64url'), kid: 'legacy-ed25519', alg: 'EdDSA', status: 'active' }] };
+    }
+    this.jwksCache = { value, fetchedAt: Date.now() };
+    return value;
+  }
+
+  /**
+   * The broker's legacy Ed25519 public key. It signed v1 receipts and tokens
+   * issued before 2026-09-30; everything newer is ES256 (use `getJwks()`).
    */
   async getPublicKey(): Promise<BrokerPublicKey> {
     const raw = await request<{
@@ -680,7 +729,7 @@ export class ParafeClient {
       action: string;
       timestamp: string;
     }>(`${this.brokerUrl}/interaction/record`, {
-      ...this.agentHttpOpts(opts.agentId),
+      ...(await this.agentHttpOpts('POST', `${this.brokerUrl}/interaction/record`, { session_id: opts.sessionId }, opts.agentId)),
       method: 'POST',
       body,
     });
@@ -694,58 +743,64 @@ export class ParafeClient {
     };
   }
 
-  // ── Session close ────────────────────────────────────────────────────────────
+  // ── Session close and receipts ───────────────────────────────────────────────
 
   /**
-   * Close an active session and receive the signed interaction receipt.
-   * Authenticates as the loaded agent (its credential), or with the API key if none
-   * is loaded; the broker requires the caller to be (or own) a participant.
+   * Close an active session and receive its receipt. `receipt.receipt` is the
+   * evidence (a JWS signed by the broker); the other fields are decoded from it.
+   * Authenticates as the loaded agent (credential + proof of possession), or with
+   * the API key if none is loaded; the broker requires a participant.
    */
   async closeSession(sessionId: string): Promise<SessionReceipt> {
-    const raw = await request<Record<string, unknown>>(`${this.brokerUrl}/session/close`, {
-      ...this.agentHttpOpts(),
+    const url = `${this.brokerUrl}/session/close`;
+    const raw = await request<Record<string, unknown>>(url, {
+      ...(await this.agentHttpOpts('POST', url, { session_id: sessionId })),
       method: 'POST',
       body: { session_id: sessionId },
     });
-
-    return normalizeReceipt(raw);
+    if (typeof raw.receipt !== 'string') {
+      throw new ParafeError('This broker issues v1 receipts; SDK 0.4 reads v2 receipts (broker 2026-09-30 or later). Use SDK 0.3.x with it.', 'receipt_v1', 200);
+    }
+    return decodeReceipt(raw.receipt);
   }
 
-  // ── Receipt verification ─────────────────────────────────────────────────────
+  /**
+   * Fetch a closed session's receipt (B5). Either participant can, not only the
+   * one that closed it. Receipts from before 2026-09-30 come back as
+   * `{ formatVersion: 1, issued }`.
+   */
+  async getReceipt(sessionId: string): Promise<SessionReceipt | LegacySessionReceipt> {
+    const url = `${this.brokerUrl}/sessions/${encodeURIComponent(sessionId)}/receipt`;
+    const raw = await request<Record<string, unknown>>(url, {
+      ...(await this.agentHttpOpts('GET', url, { session_id: sessionId })),
+      method: 'GET',
+    });
+    return receiptFromResponse(raw);
+  }
 
   /**
-   * Verify a session receipt's Ed25519 signature against the broker's public key.
-   *
-   * Sends `receipt.issued` (the receipt exactly as the broker issued it) when
-   * present, and reports tampering if the readable fields no longer match it.
-   * Receipts without `issued` (from SDK 0.3.1 or earlier) are rebuilt from the
-   * readable fields, as before.
+   * Verify a receipt with the broker. Accepts a `SessionReceipt` (its JWS is
+   * sent; the decoded fields are ignored), the JWS string itself, or a v1
+   * receipt (`LegacySessionReceipt`). For offline checks use
+   * `verifyReceiptLocally()` or `@getparafe/verify`.
    */
-  async verifyReceipt(receipt: SessionReceipt): Promise<VerifyReceiptResult> {
-    let signed: Record<string, unknown>;
-    if (receipt.issued) {
-      if (stableStringify(receiptView(normalizeReceipt(receipt.issued))) !== stableStringify(receiptView(receipt))) {
-        return {
-          valid: false,
-          signedBy: null,
-          receiptId: (receipt.issued.receipt_id as string) ?? null,
-          tamperDetected: true,
-        };
-      }
-      signed = receipt.issued;
-    } else {
-      signed = denormalizeReceipt(receipt);
-    }
+  async verifyReceipt(receipt: SessionReceipt | LegacySessionReceipt | string): Promise<VerifyReceiptResult> {
+    const body = typeof receipt === 'string'
+      ? { receipt }
+      : receipt.formatVersion === 2 ? { receipt: receipt.receipt } : { receipt: receipt.issued };
 
     const raw = await request<{
       valid: boolean;
       signed_by: string | null;
       receipt_id: string | null;
       tamper_detected: boolean;
+      format_version?: 1 | 2;
+      claims?: Record<string, unknown>;
+      error?: string;
     }>(`${this.brokerUrl}/receipt/verify`, {
       ...this.httpOpts,
       method: 'POST',
-      body: { receipt: signed },
+      body,
     });
 
     return {
@@ -753,7 +808,26 @@ export class ParafeClient {
       signedBy: raw.signed_by,
       receiptId: raw.receipt_id,
       tamperDetected: raw.tamper_detected,
+      formatVersion: raw.format_version,
+      claims: raw.claims,
+      error: raw.error,
     };
+  }
+
+  /**
+   * Verify a v2 receipt offline against the broker's JWKS (fetched and cached
+   * when `keys` is omitted): ES256 signature by a broker key, typ, version.
+   */
+  async verifyReceiptLocally(receipt: SessionReceipt | string, keys?: BrokerJwks): Promise<VerifyReceiptResult> {
+    const jws = typeof receipt === 'string' ? receipt : receipt.receipt;
+    try {
+      const keySet = jose.createLocalJWKSet((keys ?? (await this.getJwks())) as unknown as jose.JSONWebKeySet);
+      const { payload } = await jose.jwtVerify(jws, keySet, { typ: RECEIPT_TYP, algorithms: ['ES256'] });
+      if (payload.ver !== 2) throw new Error('Not a v2 session receipt');
+      return { valid: true, signedBy: payload.iss ?? null, receiptId: (payload.receipt_id as string) ?? null, tamperDetected: false, formatVersion: 2, claims: payload };
+    } catch (err) {
+      return { valid: false, signedBy: null, receiptId: null, tamperDetected: true, formatVersion: 2, error: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   // ── Agent lifecycle ──────────────────────────────────────────────────────────
@@ -763,12 +837,14 @@ export class ParafeClient {
    * Uses the agent's own credential if loaded (and matches agentId), otherwise falls back to API key.
    */
   async revokeAgent(agentId: string): Promise<RevokeAgentResult> {
-    // Prefer credential auth when the loaded credential matches this agent
-    const headers: Record<string, string> = {};
+    // Prefer credential auth (plus a proof of possession) when the loaded
+    // credential matches this agent
+    const url = `${this.brokerUrl}/agents/${agentId}/revoke`;
+    let headers: Record<string, string>;
     if (this.credentials?.agentId === agentId && this.credentials.credential) {
-      headers.Authorization = `Bearer ${this.credentials.credential}`;
+      headers = { Authorization: `Bearer ${this.credentials.credential}`, ...(await this.proofHeader('POST', url, { agent_id: agentId })) };
     } else {
-      headers.Authorization = `Bearer ${this.apiKey}`;
+      headers = { Authorization: `Bearer ${this.apiKey}` };
     }
 
     const raw = await request<{
@@ -790,22 +866,31 @@ export class ParafeClient {
   }
 
   /**
-   * Renew an agent's credential to pick up the org's current verification tier.
-   * Requires a valid API key or session token auth header.
+   * Renew an agent's credential. The broker re-issues it when the owner's
+   * verification tier changed, or when it is expired or within 7 days of expiry;
+   * otherwise `renewed: false`. Authenticates with the API key; without one, the
+   * loaded agent renews itself (credential + proof of possession), which is how
+   * agents with no owner renew.
    */
   async renewCredential(agentId: string): Promise<RenewCredentialResult> {
+    const url = `${this.brokerUrl}/agents/${agentId}/renew`;
+    const opts = this.apiKey
+      ? this.httpOpts
+      : await this.agentHttpOpts('POST', url, { agent_id: agentId }, agentId);
     const raw = await request<{
       agent_id: string;
       renewed: boolean;
+      reason?: string;
       previous_tier?: string;
       current_tier?: string;
       credential?: string;
+      credential_sd_jwt?: string;
       issued_at?: string;
       expires_at?: string;
       message?: string;
       verification_tier?: string;
-    }>(`${this.brokerUrl}/agents/${agentId}/renew`, {
-      ...this.httpOpts,
+    }>(url, {
+      ...opts,
       method: 'POST',
     });
 
@@ -814,6 +899,7 @@ export class ParafeClient {
       this.credentials = {
         ...this.credentials,
         credential: raw.credential,
+        credentialSdJwt: raw.credential_sd_jwt ?? this.credentials.credentialSdJwt,
         issuedAt: raw.issued_at ?? this.credentials.issuedAt,
         expiresAt: raw.expires_at ?? this.credentials.expiresAt,
       };
@@ -822,9 +908,11 @@ export class ParafeClient {
     return {
       agentId: raw.agent_id,
       renewed: raw.renewed,
+      reason: raw.reason,
       previousTier: raw.previous_tier,
       currentTier: raw.current_tier ?? raw.verification_tier,
       credential: raw.credential,
+      credentialSdJwt: raw.credential_sd_jwt,
       issuedAt: raw.issued_at,
       expiresAt: raw.expires_at,
       message: raw.message,
@@ -847,6 +935,7 @@ export class ParafeClient {
       updated_at: string;
     }>(`${this.brokerUrl}/agents/${agentId}/scope-policies`, {
       ...this.httpOpts,
+      headers: { ...this.httpOpts.headers, ...(await this.proofHeader('PUT', `${this.brokerUrl}/agents/${agentId}/scope-policies`, { agent_id: agentId })) },
       method: 'PUT',
       body: {
         credential: creds.credential,
