@@ -610,7 +610,7 @@ export class ParafeClient {
       for (let i = 0; i < keys.length; i += 64) pemLines.push(keys.slice(i, i + 64));
       key = await jose.importSPKI(`-----BEGIN PUBLIC KEY-----\n${pemLines.join('\n')}\n-----END PUBLIC KEY-----`, 'EdDSA');
     } else {
-      key = jose.createLocalJWKSet((keys ?? (await this.getJwks())) as unknown as jose.JSONWebKeySet);
+      key = jose.createLocalJWKSet((keys ?? (await this.getJwks(await this.unknownKid(consentToken, keys)))) as unknown as jose.JSONWebKeySet);
     }
 
     // A bad signature or a foreign issuer throws. An expired token doesn't: jose
@@ -671,11 +671,24 @@ export class ParafeClient {
   private jwksCache: { value: BrokerJwks; fetchedAt: number } | null = null;
 
   /**
+   * True when we fetch the keys ourselves, have them cached, and the JWS names
+   * a kid that isn't among them (the broker rotated or added a key).
+   */
+  private async unknownKid(jws: string, keys?: BrokerJwks): Promise<boolean> {
+    if (keys || !this.jwksCache) return false;
+    let kid: string | undefined;
+    try { kid = jose.decodeProtectedHeader(jws).kid; } catch { return false; }
+    return Boolean(kid) && !this.jwksCache.value.keys.some((k) => k.kid === kid);
+  }
+
+  /**
    * The broker's signing keys (JWKS): the active ES256 key and retired keys.
    * Cached for 5 minutes. Match a JWS's `kid` against it.
    */
-  async getJwks(): Promise<BrokerJwks> {
-    if (this.jwksCache && Date.now() - this.jwksCache.fetchedAt < 5 * 60 * 1000) return this.jwksCache.value;
+  async getJwks(forceRefresh = false): Promise<BrokerJwks> {
+    const age = this.jwksCache ? Date.now() - this.jwksCache.fetchedAt : Infinity;
+    // A forced refresh (a token names a key we don't have) is allowed once a minute.
+    if (this.jwksCache && age < 5 * 60 * 1000 && !(forceRefresh && age >= 60 * 1000)) return this.jwksCache.value;
     let value: BrokerJwks;
     try {
       value = await request<BrokerJwks>(`${this.brokerUrl}/.well-known/jwks.json`, { ...this.httpOpts, method: 'GET' });
@@ -824,7 +837,7 @@ export class ParafeClient {
   async verifyReceiptLocally(receipt: SessionReceipt | string, keys?: BrokerJwks): Promise<VerifyReceiptResult> {
     const jws = typeof receipt === 'string' ? receipt : receipt.receipt;
     try {
-      const keySet = jose.createLocalJWKSet((keys ?? (await this.getJwks())) as unknown as jose.JSONWebKeySet);
+      const keySet = jose.createLocalJWKSet((keys ?? (await this.getJwks(await this.unknownKid(jws, keys)))) as unknown as jose.JSONWebKeySet);
       const { payload } = await jose.jwtVerify(jws, keySet, { typ: RECEIPT_TYP, algorithms: ['ES256'] });
       if (payload.ver !== 2) throw new Error('Not a v2 session receipt');
       return { valid: true, signedBy: payload.iss ?? null, receiptId: (payload.receipt_id as string) ?? null, tamperDetected: false, formatVersion: 2, claims: payload };

@@ -81,6 +81,32 @@ describe('verifyConsentLocally()', () => {
     }
   });
 
+  it('refetches the JWKS once when a token names a key it does not have (a newly added broker key)', async () => {
+    const realFetch = globalThis.fetch;
+    const newKey = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+    const newJwk = { ...(newKey.publicKey.export({ format: 'jwk' }) as Record<string, string>), kid: 'es-2', alg: 'ES256', status: 'active' };
+    let fetches = 0;
+    globalThis.fetch = jest.fn(async () => {
+      fetches++;
+      const body = fetches === 1 ? JWKS : { keys: [newJwk, ...(JWKS as unknown as { keys: unknown[] }).keys] };
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as typeof fetch;
+    const now = Date.now();
+    const clock = jest.spyOn(Date, 'now');
+    try {
+      const c = new ParafeClient({ brokerUrl: 'https://broker.test', retries: 0 });
+      await c.verifyConsentLocally(await consentToken({ permissions: [] }));
+      const rotated = await new jose.SignJWT({ token_type: 'consent', scope: 's', session_id: 'sess_1', permissions: [] })
+        .setProtectedHeader({ alg: 'ES256', kid: 'es-2' }).setIssuer('parafe-trust-broker').setIssuedAt().setExpirationTime('5m').sign(newKey.privateKey);
+      clock.mockReturnValue(now + 2 * 60 * 1000); // past the one-minute refetch limit, inside the 5-minute cache
+      expect((await c.verifyConsentLocally(rotated)).scope).toBe('s');
+      expect(fetches).toBe(2);
+    } finally {
+      clock.mockRestore();
+      globalThis.fetch = realFetch;
+    }
+  });
+
   it('returns expired: true for an expired token instead of throwing', async () => {
     const token = await new jose.SignJWT({ token_type: 'consent', scope: 's', session_id: 'sess_1', permissions: [], exclusions: ['x'] })
       .setProtectedHeader({ alg: 'ES256', kid: 'es-1' })
