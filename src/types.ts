@@ -303,6 +303,18 @@ export interface ActionReceiptAck {
   claims: Record<string, unknown>;
   /** True when the receipt was already filed (by you or the other participant). */
   duplicate: boolean;
+  /**
+   * A3, for entries that name an AP2 mandate (an AP2 receipt's `reference`, an
+   * action receipt's `mandateRef`); null otherwise. `referenceVerified`: it
+   * matched a mandate that this receipt's issuer (or the handshake) verified in
+   * the session; `mandateRef`: that closed-mandate hash; `mandateVerifiedBy`:
+   * the agent that verified it; `mandateIssuerSource`: whose trust list it
+   * passed (`scope_policy`, `broker`, or `request`: the verifier's own list).
+   */
+  referenceVerified: boolean | null;
+  mandateRef: string | null;
+  mandateVerifiedBy: string | null;
+  mandateIssuerSource: string | null;
 }
 
 export interface RecordActionReceiptResult {
@@ -328,6 +340,18 @@ export interface SessionIndexEntry {
   indexedAt: string;
   filedBy: string | null;
   acknowledgment: string;
+  /**
+   * A3, for entries that name an AP2 mandate (an AP2 receipt's `reference`, an
+   * action receipt's `mandateRef`); null otherwise. `referenceVerified`: it
+   * matched a mandate that this receipt's issuer (or the handshake) verified in
+   * the session; `mandateRef`: that closed-mandate hash; `mandateVerifiedBy`:
+   * the agent that verified it; `mandateIssuerSource`: whose trust list it
+   * passed (`scope_policy`, `broker`, or `request`: the verifier's own list).
+   */
+  referenceVerified: boolean | null;
+  mandateRef: string | null;
+  mandateVerifiedBy: string | null;
+  mandateIssuerSource: string | null;
 }
 
 export interface SessionIndex {
@@ -347,6 +371,18 @@ export interface ReceiptAction {
   action: string;
   result: 'success' | 'error';
   error: string | null;
+  /**
+   * A3, for entries that name an AP2 mandate (an AP2 receipt's `reference`, an
+   * action receipt's `mandateRef`); null otherwise. `referenceVerified`: it
+   * matched a mandate that this receipt's issuer (or the handshake) verified in
+   * the session; `mandateRef`: that closed-mandate hash; `mandateVerifiedBy`:
+   * the agent that verified it; `mandateIssuerSource`: whose trust list it
+   * passed (`scope_policy`, `broker`, or `request`: the verifier's own list).
+   */
+  referenceVerified: boolean | null;
+  mandateRef: string | null;
+  mandateVerifiedBy: string | null;
+  mandateIssuerSource: string | null;
 }
 
 /** @deprecated `/interaction/record` is replaced by action receipts (`recordActionReceipt`). */

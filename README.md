@@ -169,6 +169,12 @@ const escalated = await parafe.escalateScope({
 });
 ```
 
+## Breaking in 0.7.0
+
+- `ParafeClient.authorization.verified()` takes the user-signed AP2 mandate (`{ mandate, checkoutJwt?, checkoutHash?, checkoutMandate? }`) instead of `{ instruction, platform, userSignature }`. The old form was deprecated and the broker refused it; passing `userSignature` now throws.
+- `ReceiptConsentToken.authorization.mandateRefs` is `MandateRef[]` (`{ family, closedJwt, sdHash }`) instead of `string[]` (it was always empty before).
+- New, additive: `authorization.delegated()`, `verifyMandate()`, `signAp2Receipt()` / `recordAp2Receipt()`, `ap2MandateReferences()`, `mandateRefs` on consent tokens, and the A3 mandate check (`referenceVerified`, `mandateRef`, `mandateVerifiedBy`, `mandateIssuerSource`) on acknowledgments, index entries and receipt actions.
+
 ## Authorization Helpers
 
 ```typescript
@@ -209,7 +215,7 @@ if (!r.valid) {
 }
 ```
 
-The broker checks the chain against the issuers you trust (plus its own list), every constraint, and the checkout binding, and records the redemption: the same mandate, or another one for the same checkout, presented again returns `alreadyRedeemed: true`. `r.agent` names the registered Parafé agent whose key signed the mandate (human not present), with `isCounterparty` in a session. To verify offline instead, use `verifyAp2Mandate` from `@getparafe/verify`.
+The broker checks the chain against the issuers you trust (plus its own list; never the broker's own keys), every constraint, and the checkout binding, refuses a "human present" mandate signed by a registered agent's key, and records the redemption: the same mandate, or another one for the same checkout, presented again returns `alreadyRedeemed: true`. `r.agent` names the registered Parafé agent whose key signed the mandate (human not present), with `isCounterparty` in a session. To verify offline instead, use `verifyAp2Mandate` from `@getparafe/verify`.
 
 Once you've accepted or rejected the mandate, AP2 says you MUST return a Checkout Receipt (a payment processor: a Payment Receipt). Sign it as your agent (it needs a P-256 key) and file it in the session:
 
@@ -220,7 +226,7 @@ const receipt = await parafe.recordAp2Receipt(sessionId, r.valid
 // return receipt.receipt to the shopping agent
 ```
 
-AP2's spec and its SDK compute the receipt's `reference` differently; the receipt uses the AP2 SDK's form by default (`referenceForm: 'sd_hash'` for the spec's), and `receipt.references` gives both. The broker checks it against the mandates verified in the session (`reference_verified` on the index entry).
+AP2's spec and its SDK compute the receipt's `reference` differently; the receipt uses the AP2 SDK's form by default (`referenceForm: 'sd_hash'` for the spec's), and `receipt.references` gives both. The broker checks it against the mandates you (or the handshake) verified in the session: `ack.referenceVerified`, with `mandateVerifiedBy` and `mandateIssuerSource`. A mandate the other participant verified doesn't count for your receipts.
 
 ## Agent Lifecycle
 

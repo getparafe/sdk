@@ -151,7 +151,7 @@ describe('decodeReceipt() actions', () => {
       chain_head: 'e1',
     }).setProtectedHeader({ alg: 'ES256', kid: 'k1', typ: 'parafe-session-receipt+jwt' }).sign(brokerKey.privateKey);
     const r = decodeReceipt(jws);
-    expect(r.actions).toEqual([{ seq: 1, receiptHash: 'h1', kind: 'parafe.action_receipt', iss: DID, issuerVerified: true, action: 'issue_refund', result: 'error', error: 'excluded' }]);
+    expect(r.actions).toEqual([{ seq: 1, receiptHash: 'h1', kind: 'parafe.action_receipt', iss: DID, issuerVerified: true, action: 'issue_refund', result: 'error', error: 'excluded', referenceVerified: null, mandateRef: null, mandateVerifiedBy: null, mandateIssuerSource: null }]);
     expect(r.chainHead).toBe('e1');
   });
 });

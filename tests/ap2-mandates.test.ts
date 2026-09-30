@@ -148,3 +148,21 @@ test('A3: recordAp2Receipt files it with its kind', async () => {
   expect(calls[0]!.body).toEqual({ receipt: r.receipt, kind: 'ap2.checkout_receipt' });
   expect(r.ack.seq).toBe(3);
 });
+
+test('P-38: acks, index entries and decoded receipt actions carry the A3 mandate check', async () => {
+  const claims = { seq: 1, reference_verified: true, mandate_ref: 'c', mandate_verified_by: 'prf_agent_shop01', mandate_issuer_source: 'scope_policy' };
+  respond = () => ({ status: 201, body: { session_id: 'sess_1', seq: 1, receipt_hash: 'h', entry_hash: 'e', acknowledgment: 'x.eyJ9.y', claims } });
+  const p = await merchant();
+  const r = await p.recordAp2Receipt('sess_1', { kind: 'checkout', mandate: checkoutVector.chain, orderId: 'o' });
+  expect(r.ack).toMatchObject({ referenceVerified: true, mandateRef: 'c', mandateVerifiedBy: 'prf_agent_shop01', mandateIssuerSource: 'scope_policy' });
+  respond = () => ({ status: 200, body: { session_id: 'sess_1', chain_head: 'e', entries: [
+    { seq: 1, kind: 'ap2.checkout_receipt', receipt: 'r', receipt_hash: 'h', action: 'ap2.checkout', result: 'success', reference_verified: false, mandate_ref: null },
+    { seq: 2, kind: 'parafe.action_receipt', receipt: 'r2', receipt_hash: 'h2', action: 'x', result: 'success' },
+  ] } });
+  const idx = await p.getActionReceipts('sess_1');
+  expect(idx.entries[0]).toMatchObject({ referenceVerified: false, mandateRef: null });
+  expect(idx.entries[1]).toMatchObject({ referenceVerified: null, mandateRef: null });
+  const receiptJws = `${jose.base64url.encode('{"alg":"ES256"}')}.${jose.base64url.encode(JSON.stringify({ ver: 2, session_id: 's', participants: {}, handshake: {}, consent_tokens: [], session: {}, actions: [{ seq: 1, receipt_hash: 'h', kind: 'ap2.checkout_receipt', iss: 'm', issuer_verified: true, action: 'ap2.checkout', result: 'success', error: null, reference_verified: true, mandate_ref: 'c', mandate_verified_by: 'prf_agent_shop01', mandate_issuer_source: 'request' }] }))}.sig`;
+  const { decodeReceipt } = await import('../src/index.js');
+  expect(decodeReceipt(receiptJws).actions[0]).toMatchObject({ referenceVerified: true, mandateRef: 'c', mandateIssuerSource: 'request' });
+});

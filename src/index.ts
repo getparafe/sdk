@@ -218,6 +218,7 @@ export function decodeReceipt(jws: string): SessionReceipt {
       action: a.action as string,
       result: a.result as 'success' | 'error',
       error: (a.error as string) ?? null,
+      ...mandateCheck(a),
     })),
     chainHead: (c.chain_head as string) ?? null,
     session: {
@@ -230,16 +231,29 @@ export function decodeReceipt(jws: string): SessionReceipt {
   };
 }
 
+/** A3: the mandate check on an index entry, ack or receipt action (null when it names no mandate). */
+function mandateCheck(x: Record<string, unknown> | undefined) {
+  const v = x ?? {};
+  return {
+    referenceVerified: typeof v.reference_verified === 'boolean' ? v.reference_verified : null,
+    mandateRef: (v.mandate_ref as string) ?? null,
+    mandateVerifiedBy: (v.mandate_verified_by as string) ?? null,
+    mandateIssuerSource: (v.mandate_issuer_source as string) ?? null,
+  };
+}
+
 function ackFromResponse(raw: Record<string, unknown>, duplicate: boolean): ActionReceiptAck {
   const acknowledgment = raw.acknowledgment as string;
+  const claims = (raw.claims as Record<string, unknown>) ?? jose.decodeJwt(acknowledgment);
   return {
     sessionId: raw.session_id as string,
     seq: raw.seq as number,
     receiptHash: raw.receipt_hash as string,
     entryHash: raw.entry_hash as string,
     acknowledgment,
-    claims: (raw.claims as Record<string, unknown>) ?? jose.decodeJwt(acknowledgment),
+    claims,
     duplicate,
+    ...mandateCheck(claims),
   };
 }
 
@@ -1024,6 +1038,7 @@ export class ParafeClient {
         indexedAt: e.indexed_at as string,
         filedBy: (e.filed_by as string) ?? null,
         acknowledgment: e.acknowledgment as string,
+        ...mandateCheck(e),
       })),
     };
   }
