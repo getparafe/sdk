@@ -542,6 +542,98 @@ export interface AgentMetrics {
   actions: ActionMetrics;
 }
 
+// ── AP2 mandates (verifyMandate(), broker A1) ──
+
+/** An AP2 mandate issuer you trust: a Credential Provider or Agent Provider public key. */
+export interface Ap2TrustedIssuer {
+  /** A public JWK (EC P-256 in AP2). */
+  jwk: { kty: string; crv?: string; x?: string; y?: string; kid?: string; [k: string]: unknown };
+  kid?: string;
+  iss?: string;
+  name?: string;
+}
+
+/** The AP2 error codes to put in a Checkout or Payment Receipt. */
+export type Ap2ErrorCode = 'invalid_credential' | 'unresolved_constraint' | 'invalid_mandate' | 'mandates_not_supported';
+
+/** A receipt `reference` both ways until AP2 settles it: the spec's (sd_hash of the final SD-JWT) and the AP2 SDK's (SHA-256 of the closed mandate JWT). */
+export interface Ap2References {
+  sdHash: string;
+  closedJwt: string;
+}
+
+export interface VerifyMandateOptions {
+  /** The AP2 mandate as presented: the `~~`-joined Delegate SD-JWT chain. */
+  mandate: string;
+  /** Record the mandate in this session (the loaded agent must be a participant). */
+  sessionId?: string;
+  /** The verifying agent, when authenticating with the owner's API key instead of a loaded credential. */
+  agentId?: string;
+  /** The merchant-signed Checkout JWT, when the checkout mandate doesn't disclose it; for a payment mandate, the checkout it pays. */
+  checkoutJwt?: string;
+  /** Payment mandate: the expected `transaction_id`, if you don't hold the Checkout JWT. */
+  checkoutHash?: string;
+  /** Payment mandate: the checkout mandate chain it belongs to (verified too; supplies payment.reference). */
+  checkoutMandate?: string;
+  expectedAudience?: string;
+  expectedNonce?: string;
+  /** Issuers you accept, added to the broker's list. */
+  trustedIssuers?: Ap2TrustedIssuer[];
+  /** For payment.budget and payment.agent_recurrence: minor units spent, earlier uses, last use (Unix seconds). */
+  context?: { totalAmount?: number; totalUses?: number; lastUsedAt?: number };
+  /** Record the redemption (default true). A second redemption of the same mandate or checkout is refused. */
+  redeem?: boolean;
+}
+
+export interface MandateAgentMatch {
+  agentId: string;
+  did: string;
+  agentName: string;
+  identityAssurance: string;
+  verificationTier: string;
+  orgDomain?: string;
+  /** In a session: whether the agent holding the mandate's key is your counterparty. */
+  isCounterparty?: boolean;
+}
+
+export interface MandateRedemption {
+  mandateId: string;
+  family: 'checkout' | 'payment';
+  mandateHash: string;
+  transactionRef: string;
+  verifierAgentId: string;
+  sessionId: string | null;
+  redeemedAt: string;
+}
+
+export interface VerifyMandateResult {
+  valid: boolean;
+  family: 'checkout' | 'payment' | null;
+  mode: 'human_present' | 'human_not_present' | null;
+  /** When invalid: the AP2 error code for your receipt, a more specific reason, and the failed constraints. */
+  error?: Ap2ErrorCode;
+  reason?: string;
+  message?: string;
+  violations?: string[];
+  /** True when the broker refused a second redemption (reason `already_redeemed`). */
+  alreadyRedeemed: boolean;
+  references: Ap2References | null;
+  /** The redemption key: SHA-256 of the closed mandate JWT. */
+  mandateHash: string | null;
+  issuer?: { kid?: string; iss?: string; name?: string; jkt: string; source: string | null };
+  audience?: string | null;
+  nonce?: string | null;
+  presentedAt?: string | null;
+  checkoutHash?: string | null;
+  transactionId?: string | null;
+  closedMandate?: Record<string, unknown>;
+  openMandates?: Record<string, unknown>[];
+  agentKeyThumbprint?: string | null;
+  /** The registered Parafé agent whose key is the mandate's agent key (human not present). */
+  agent: MandateAgentMatch | null;
+  redemption: MandateRedemption | null;
+}
+
 // ── Encrypted credential file format ──
 
 export interface EncryptedCredentialFile {

@@ -186,6 +186,26 @@ ParafeClient.authorization.attested({
 
 `ParafeClient.authorization.verified()` is deprecated. The broker refuses `verified` with `400 verified_evidence_unverifiable`: it can't check a bare signature string, so it won't vouch for one. `verified` will require a user-signed AP2 mandate that the broker verifies. Until then, use `attested`, and note that a scope requiring `verified` can't be reached.
 
+## AP2 mandates
+
+If your agent is a merchant (or a credential provider) and a shopping agent presents an [AP2](https://github.com/google-agentic-commerce/AP2) v0.2 Checkout or Payment Mandate, the broker can check it for you:
+
+```typescript
+const r = await parafe.verifyMandate({
+  mandate,                      // as presented: the ~~-joined Delegate SD-JWT chain
+  checkoutJwt,                  // the Checkout JWT you signed, if the mandate doesn't disclose it
+  expectedAudience: 'merchant', // what you asked the agent to bind it to
+  expectedNonce,
+  trustedIssuers: [{ jwk: providerPublicJwk, name: 'Example Agent Provider' }],
+  sessionId,                    // optional: record it in the Parafé session
+});
+if (!r.valid) {
+  // r.error is the AP2 error code for your Checkout Receipt; r.references gives its `reference`.
+}
+```
+
+The broker checks the chain against the issuers you trust (plus its own list), every constraint, and the checkout binding, and records the redemption: the same mandate, or another one for the same checkout, presented again returns `alreadyRedeemed: true`. `r.agent` names the registered Parafé agent whose key signed the mandate (human not present), with `isCounterparty` in a session. To verify offline instead, use `verifyAp2Mandate` from `@getparafe/verify`.
+
 ## Agent Lifecycle
 
 ```typescript

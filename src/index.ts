@@ -52,6 +52,8 @@ import type {
   RecordActionReceiptResult,
   SessionIndex,
   ReceiptKind,
+  VerifyMandateOptions,
+  VerifyMandateResult,
 } from './types.js';
 
 // Re-export everything consumers need
@@ -230,6 +232,56 @@ function receiptFromResponse(raw: Record<string, unknown>): SessionReceipt | Leg
 }
 
 // ─── ParafeClient ─────────────────────────────────────────────────────────────
+
+/** The broker's /ap2/mandates/verify response, camelCased. */
+function mandateResult(raw: Record<string, unknown>): VerifyMandateResult {
+  const refs = raw.references as { sd_hash: string; closed_jwt: string } | null | undefined;
+  const agent = raw.agent as Record<string, unknown> | null | undefined;
+  const red = raw.redemption as Record<string, unknown> | null | undefined;
+  const out: VerifyMandateResult = {
+    valid: raw.valid === true,
+    family: (raw.family as VerifyMandateResult['family']) ?? null,
+    mode: (raw.mode as VerifyMandateResult['mode']) ?? null,
+    alreadyRedeemed: raw.reason === 'already_redeemed',
+    references: refs ? { sdHash: refs.sd_hash, closedJwt: refs.closed_jwt } : null,
+    mandateHash: (raw.mandate_hash as string) ?? null,
+    agent: agent
+      ? {
+          agentId: agent.agent_id as string,
+          did: agent.did as string,
+          agentName: agent.agent_name as string,
+          identityAssurance: agent.identity_assurance as string,
+          verificationTier: agent.verification_tier as string,
+          ...(agent.org_domain ? { orgDomain: agent.org_domain as string } : {}),
+          ...(typeof agent.is_counterparty === 'boolean' ? { isCounterparty: agent.is_counterparty } : {}),
+        }
+      : null,
+    redemption: red
+      ? {
+          mandateId: red.mandate_id as string,
+          family: red.family as 'checkout' | 'payment',
+          mandateHash: red.mandate_hash as string,
+          transactionRef: red.transaction_ref as string,
+          verifierAgentId: red.verifier_agent_id as string,
+          sessionId: (red.session_id as string) ?? null,
+          redeemedAt: red.redeemed_at as string,
+        }
+      : null,
+  };
+  if (!out.valid) {
+    out.error = raw.error as VerifyMandateResult['error'];
+    out.reason = raw.reason as string;
+    out.message = raw.message as string;
+    out.violations = (raw.violations as string[]) ?? [];
+  }
+  if (raw.issuer) out.issuer = raw.issuer as VerifyMandateResult['issuer'];
+  for (const [from, to] of [['audience', 'audience'], ['nonce', 'nonce'], ['presented_at', 'presentedAt'], ['checkout_hash', 'checkoutHash'], ['transaction_id', 'transactionId'], ['agent_key_thumbprint', 'agentKeyThumbprint']] as const) {
+    if (raw[from] !== undefined) (out as unknown as Record<string, unknown>)[to] = raw[from];
+  }
+  if (raw.closed_mandate) out.closedMandate = raw.closed_mandate as Record<string, unknown>;
+  if (raw.open_mandates) out.openMandates = raw.open_mandates as Record<string, unknown>[];
+  return out;
+}
 
 export class ParafeClient {
   private readonly brokerUrl: string;
@@ -924,6 +976,52 @@ export class ParafeClient {
         acknowledgment: e.acknowledgment as string,
       })),
     };
+  }
+
+  // ── AP2 mandates (broker A1) ─────────────────────────────────────────────────
+
+  /**
+   * Have the broker verify an AP2 mandate presented to you (you are the
+   * merchant, or the credential provider): the Delegate SD-JWT chain against
+   * the issuers you trust, every constraint, the checkout binding. Returns the
+   * AP2 error code to put in your Checkout or Payment Receipt when it fails,
+   * the receipt `reference` both ways, and the registered agent holding the
+   * mandate's agent key. The broker records the redemption: presenting the
+   * same mandate (or another for the same checkout) again gets
+   * `alreadyRedeemed: true`. Authenticates as the loaded agent (credential and
+   * proof); with only an API key, pass `agentId`.
+   */
+  async verifyMandate(opts: VerifyMandateOptions): Promise<VerifyMandateResult> {
+    if (!opts.mandate) throw new ValidationError('mandate is required', 'validation_error');
+    const url = `${this.brokerUrl}/ap2/mandates/verify`;
+    const creds = this.credentials;
+    const acting = opts.agentId ?? creds?.agentId;
+    if (!acting) throw new ValidationError('Load the verifying agent (register() or loadCredentials()) or pass agentId', 'no_credentials');
+    const body: Record<string, unknown> = { mandate: opts.mandate };
+    if (opts.sessionId) body.session_id = opts.sessionId;
+    if (opts.agentId) body.agent_id = opts.agentId;
+    if (opts.checkoutJwt) body.checkout_jwt = opts.checkoutJwt;
+    if (opts.checkoutHash) body.checkout_hash = opts.checkoutHash;
+    if (opts.checkoutMandate) body.checkout_mandate = opts.checkoutMandate;
+    if (opts.expectedAudience) body.expected_audience = opts.expectedAudience;
+    if (opts.expectedNonce) body.expected_nonce = opts.expectedNonce;
+    if (opts.trustedIssuers) body.trusted_issuers = opts.trustedIssuers;
+    if (opts.context) {
+      body.context = {
+        ...(opts.context.totalAmount !== undefined ? { total_amount: opts.context.totalAmount } : {}),
+        ...(opts.context.totalUses !== undefined ? { total_uses: opts.context.totalUses } : {}),
+        ...(opts.context.lastUsedAt !== undefined ? { last_used_at: opts.context.lastUsedAt } : {}),
+      };
+    }
+    if (opts.redeem !== undefined) body.redeem = opts.redeem;
+    const claims = opts.sessionId ? { session_id: opts.sessionId } : { agent_id: acting };
+    try {
+      const raw = await request<Record<string, unknown>>(url, { ...(await this.agentHttpOpts('POST', url, claims, acting)), method: 'POST', body });
+      return mandateResult(raw);
+    } catch (err) {
+      if (err instanceof ConflictError && err.body && err.body.reason === 'already_redeemed') return mandateResult(err.body);
+      throw err;
+    }
   }
 
   // ── Interaction recording (before B6) ────────────────────────────────────────
