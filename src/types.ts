@@ -47,7 +47,7 @@ export interface ScopePolicy {
   permissions?: string[];
   exclusions?: string[];
   minimum_authorization_modality?: 'autonomous' | 'attested' | 'verified';
-  minimum_identity_assurance?: 'self_registered' | 'registered';
+  minimum_identity_assurance?: 'self_registered' | 'registered' | 'claimed';
   minimum_verification_tier?: 'unverified' | 'email_verified' | 'domain_verified' | 'org_verified';
   /** Require the initiator to prove it holds its key ('pop'), not just show its credential. */
   minimum_initiator_proof?: 'pop' | 'credential';
@@ -81,6 +81,36 @@ export interface RegisterResult {
   identityAssurance: string;
   issuedAt: string;
   expiresAt: string;
+  /**
+   * Keyless registrations only (no API key: the agent has no owner). Show the
+   * link to the person the agent acts for; once they approve it in the portal,
+   * the agent is theirs (identity assurance 'claimed', their verification tier).
+   */
+  claimLink?: ClaimLink;
+}
+
+// ── Claim links (Phase 1.5) ──
+
+/** A single-use link (30 minutes) for the person an unowned agent acts for. */
+export interface ClaimLink {
+  /** Portal URL to open, e.g. https://platform.parafe.ai/claim?code=7KQ2-M9XD-4H */
+  url: string;
+  /** The code, shown XXXX-XXXX-XX */
+  code: string;
+  expiresAt: string;
+}
+
+export interface ClaimStatus {
+  /** True once someone has approved a claim link (the agent has an owner). */
+  claimed: boolean;
+  /** 'self_registered' before a claim, 'claimed' after. */
+  identityAssurance: string;
+  /** The agent's verification tier (handshakes use this at once). */
+  verificationTier: string;
+  /** The owner's current tier, or null with no owner. If higher, renew. */
+  ownerTier: string | null;
+  /** False when the credential doesn't show the agent's current owner, assurance or tier yet: call renewCredential(). */
+  credentialCurrent: boolean;
 }
 
 // ── Credential status ──
@@ -346,7 +376,7 @@ export interface RenewCredentialResult {
   currentTier?: string;
   credential?: string;
   credentialSdJwt?: string;
-  /** Why it was renewed: 'tier_changed', 'near_expiry' or 'expired'. */
+  /** Why it was renewed: 'tier_changed', 'identity_changed' (e.g. after a claim), 'near_expiry' or 'expired'. */
   reason?: string;
   issuedAt?: string;
   expiresAt?: string;

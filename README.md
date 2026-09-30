@@ -182,8 +182,9 @@ ParafeClient.authorization.attested({
 // Revoke an agent
 await parafe.revokeAgent('prf_agent_...');
 
-// Renew the credential: re-issued when the owner's tier changed, or it is expired
-// or within 7 days of expiry. Without an API key, the loaded agent renews itself
+// Renew the credential: re-issued when the owner's tier changed, when the
+// credential no longer shows the agent's owner (e.g. after a claim), or it is
+// expired or within 7 days of expiry. Without an API key, the loaded agent renews itself
 // (credential + proof of possession).
 await parafe.renewCredential('prf_agent_...');
 
@@ -192,6 +193,48 @@ await parafe.updateScopePolicies('prf_agent_...', {
   'new-scope': { permissions: ['read'], exclusions: ['delete'] },
 });
 ```
+
+## Self-registered agents and claim links
+
+An agent can register with no API key: a personal assistant running on a platform, say. It starts `self_registered` and `unverified`, with no owner. To be trusted by services that require more, it asks the person it acts for to claim it. That person opens a link, signs in to the Parafé portal (or creates an account), and approves. No secret passes through the AI: the link only works for someone signed in who approves it.
+
+```typescript
+const parafe = new ParafeClient({ brokerUrl: 'https://api.parafe.ai' }); // no apiKey
+
+// 1. Register. A keyless registration comes with a claim link.
+const agent = await parafe.register({ name: 'alex-assistant', type: 'assistant', owner: 'Alex' });
+await parafe.saveCredentials('./alex-assistant.enc', process.env.PASSPHRASE!);
+console.log(agent.claimLink);
+// { url: 'https://platform.parafe.ai/claim?code=7KQ2-M9XD-4H', code: '7KQ2-M9XD-4H', expiresAt: '…' }
+
+// 2. Show the link to the person. It is single use and lasts 30 minutes;
+//    ask for a new one any time (it replaces the old one):
+const link = await parafe.createClaimLink();
+
+// 3. A service refuses the agent for its identity or tier? The error carries a link too.
+try {
+  await parafe.handshake({ targetAgentId: 'prf_agent_shop', scope: 'place-order', permissions: ['create_order'] });
+} catch (err) {
+  if (err instanceof ForbiddenError && err.claim) {
+    // err.hint: "Ask the person you act for to open this link to verify you."
+    showToUser(err.claim.url);
+  }
+}
+
+// 4. After they approve: the agent is theirs ('claimed', their verification tier).
+//    Handshakes use this at once. Renew so the credential says it too.
+const status = await parafe.getClaimStatus();
+// { claimed: true, identityAssurance: 'claimed', verificationTier: 'unverified',
+//   ownerTier: 'unverified', credentialCurrent: false }
+if (!status.credentialCurrent || status.ownerTier !== status.verificationTier) {
+  await parafe.renewCredential(agent.agentId); // reason 'identity_changed' or 'tier_changed'
+}
+```
+
+- `claimed` meets a `minimum_identity_assurance: 'registered'` policy; `self_registered` does not.
+- The agent gets the person's verification tier. If their email isn't verified yet, the tier rises once they verify it: check `getClaimStatus()` (`ownerTier` above `verificationTier`) and renew.
+- `createClaimLink()`, `getClaimStatus()` and self-renewal authenticate as the agent (credential plus proof of possession). `createClaimLink()` answers 409 `already_claimed` once the agent has an owner.
+- The person can revoke the agent from the portal like any of their agents.
 
 ## Reputation Metrics
 
@@ -234,6 +277,10 @@ try {
     // err.code — broker error string (e.g. 'invalid_credential')
     // err.statusCode — HTTP status (401)
     // err.message — human-readable description
+  }
+  if (err instanceof ForbiddenError && err.claim) {
+    // Refused for identity or tier, and the agent has no owner:
+    // show err.claim.url to the person it acts for (see claim links above)
   }
   if (err instanceof RateLimitError) {
     // Back off and retry

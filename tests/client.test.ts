@@ -21,6 +21,7 @@ import { rm } from 'node:fs/promises';
 import {
   ParafeClient,
   ValidationError,
+  ForbiddenError,
 } from '../src/index.js';
 
 const BROKER_URL =
@@ -477,6 +478,42 @@ describe('Full integration flow', () => {
 });
 
 // ─── Error handling ───────────────────────────────────────────────────────────
+
+describe('Self-registered agents and claim links (Phase 1.5)', () => {
+  // An agent registered with no API key gets a claim link for the person it acts for.
+  const keyless = new ParafeClient({ brokerUrl: BROKER_URL, timeout: 15_000, retries: 1 });
+  let firstCode = '';
+
+  test('keyless register() returns claimLink', async () => {
+    const result = await keyless.register({ name: uniqueName('sdk-claim'), type: 'assistant', owner: 'SDK Test Person' });
+    expect(result.identityAssurance).toBe('self_registered');
+    expect(result.claimLink?.code).toMatch(/^[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{2}$/);
+    expect(result.claimLink?.url).toContain('/claim?code=');
+    firstCode = result.claimLink!.code;
+  });
+
+  test('createClaimLink() replaces the link; getClaimStatus() says unclaimed', async () => {
+    const link = await keyless.createClaimLink();
+    expect(link.code).not.toBe(firstCode);
+    const status = await keyless.getClaimStatus();
+    expect(status).toEqual({
+      claimed: false, identityAssurance: 'self_registered', verificationTier: 'unverified', ownerTier: null, credentialCurrent: true,
+    });
+  });
+
+  test('a handshake refused for tier carries the claim link', async () => {
+    const target = makeClient();
+    const t = await target.register({
+      name: uniqueName('sdk-claim-target'), type: 'enterprise', owner: 'SDK Test Suite',
+      scopePolicies: { 'place-order': { permissions: ['create_order'], minimum_verification_tier: 'email_verified' } },
+    });
+    const err = await keyless.handshake({ targetAgentId: t.agentId, scope: 'place-order', permissions: ['create_order'] }).catch((e) => e);
+    expect(err).toBeInstanceOf(ForbiddenError);
+    expect(err.code).toBe('tier_insufficient');
+    expect(err.claim?.url).toContain('/claim?code=');
+    expect(typeof err.hint).toBe('string');
+  });
+});
 
 describe('Error handling', () => {
   test('register() with invalid agent_name throws ValidationError', async () => {

@@ -45,6 +45,8 @@ import type {
   VerifyConsentLocalResult,
   BrokerPublicKey,
   BrokerJwks,
+  ClaimLink,
+  ClaimStatus,
 } from './types.js';
 
 // Re-export everything consumers need
@@ -125,6 +127,10 @@ const authorization = {
 // ─── Receipt helpers ──────────────────────────────────────────────────────────
 
 const RECEIPT_TYP = 'parafe-session-receipt+jwt';
+
+function toClaimLink(raw: { claim_url: string; code: string; expires_at: string }): ClaimLink {
+  return { url: raw.claim_url, code: raw.code, expiresAt: raw.expires_at };
+}
 
 function participantView(raw: Record<string, unknown> = {}): import('./types.js').ReceiptParticipant {
   return {
@@ -303,6 +309,7 @@ export class ParafeClient {
       credential_sd_jwt?: string;
       issued_at: string;
       expires_at: string;
+      claim?: { claim_url: string; code: string; expires_at: string };
     }>(`${this.brokerUrl}/agents/register`, {
       ...this.httpOpts,
       method: 'POST',
@@ -332,6 +339,58 @@ export class ParafeClient {
       identityAssurance: raw.identity_assurance,
       issuedAt: raw.issued_at,
       expiresAt: raw.expires_at,
+      ...(raw.claim ? { claimLink: toClaimLink(raw.claim) } : {}),
+    };
+  }
+
+  // ── Claim links (Phase 1.5) ──────────────────────────────────────────────────
+
+  /**
+   * A new claim link for the loaded agent, which must have no owner (it
+   * registered without an API key). Show it to the person the agent acts for:
+   * signed in to the Parafé portal, they approve it and the agent becomes theirs.
+   * Single use, 30 minutes; replaces the previous link. Authenticates as the
+   * agent (credential + proof of possession). 409 `already_claimed` if it has an owner.
+   */
+  async createClaimLink(): Promise<ClaimLink> {
+    const creds = this.requireCredentials();
+    const url = `${this.brokerUrl}/agents/${creds.agentId}/claim-link`;
+    const raw = await request<{ claim_url: string; code: string; expires_at: string }>(url, {
+      timeout: this.timeout,
+      retries: this.retries,
+      headers: { Authorization: `Bearer ${creds.credential}`, ...(await this.proofHeader('POST', url, { agent_id: creds.agentId })) },
+      method: 'POST',
+    });
+    return toClaimLink(raw);
+  }
+
+  /**
+   * Whether the loaded agent has been claimed, and whether its credential shows
+   * it yet. When `credentialCurrent` is false, call `renewCredential(agentId)`
+   * (reason `identity_changed`, or `tier_changed` after the owner verifies their
+   * email). Handshakes use a claim as soon as it is approved.
+   */
+  async getClaimStatus(): Promise<ClaimStatus> {
+    const creds = this.requireCredentials();
+    const url = `${this.brokerUrl}/agents/${creds.agentId}/claim-status`;
+    const raw = await request<{
+      claimed: boolean;
+      identity_assurance: string;
+      verification_tier: string;
+      owner_tier: string | null;
+      credential_current: boolean;
+    }>(url, {
+      timeout: this.timeout,
+      retries: this.retries,
+      headers: { Authorization: `Bearer ${creds.credential}`, ...(await this.proofHeader('GET', url, { agent_id: creds.agentId })) },
+      method: 'GET',
+    });
+    return {
+      claimed: raw.claimed,
+      identityAssurance: raw.identity_assurance,
+      verificationTier: raw.verification_tier,
+      ownerTier: raw.owner_tier ?? null,
+      credentialCurrent: raw.credential_current,
     };
   }
 
@@ -883,7 +942,9 @@ export class ParafeClient {
 
   /**
    * Renew an agent's credential. The broker re-issues it when the owner's
-   * verification tier changed, or when it is expired or within 7 days of expiry;
+   * verification tier changed, when the credential no longer shows the agent's
+   * owner or assurance (`identity_changed`, e.g. after a claim), or when it is
+   * expired or within 7 days of expiry;
    * otherwise `renewed: false`. Authenticates with the API key; without one, the
    * loaded agent renews itself (credential + proof of possession), which is how
    * agents with no owner renew.

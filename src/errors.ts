@@ -32,9 +32,19 @@ export class AuthError extends ParafeError {
 }
 
 export class ForbiddenError extends ParafeError {
-  constructor(message: string, code = 'forbidden') {
+  /**
+   * Phase 1.5: on a handshake refused for identity or tier (identity_insufficient,
+   * tier_insufficient) when the agent has no owner, a claim link to show the
+   * person it acts for, and a hint saying so.
+   */
+  public readonly claim?: { url: string; code: string; expiresAt: string };
+  public readonly hint?: string;
+
+  constructor(message: string, code = 'forbidden', extra: { claim?: { url: string; code: string; expiresAt: string }; hint?: string } = {}) {
     super(message, code, 403);
     this.name = 'ForbiddenError';
+    if (extra.claim) this.claim = extra.claim;
+    if (extra.hint) this.hint = extra.hint;
   }
 }
 
@@ -92,8 +102,15 @@ export function mapBrokerError(statusCode: number, body: Record<string, unknown>
       return new ValidationError(message, code);
     case 401:
       return new AuthError(message, code);
-    case 403:
-      return new ForbiddenError(message, code);
+    case 403: {
+      const claim = body.claim as { claim_url?: string; code?: string; expires_at?: string } | undefined;
+      return new ForbiddenError(message, code, {
+        claim: claim && typeof claim.claim_url === 'string' && typeof claim.code === 'string'
+          ? { url: claim.claim_url, code: claim.code, expiresAt: String(claim.expires_at) }
+          : undefined,
+        hint: typeof body.hint === 'string' ? body.hint : undefined,
+      });
+    }
     case 404:
       return new NotFoundError(message, code);
     case 409:
