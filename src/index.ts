@@ -231,12 +231,23 @@ export class ParafeClient {
 
   // ── Private helpers ──────────────────────────────────────────────────────────
 
-  private get httpOpts() {
-    return {
-      timeout: this.timeout,
-      retries: this.retries,
-      headers: { Authorization: `Bearer ${this.apiKey}` },
-    };
+  private get httpOpts(): { timeout: number; retries: number; headers: Record<string, string> } {
+    const headers: Record<string, string> = this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {};
+    return { timeout: this.timeout, retries: this.retries, headers };
+  }
+
+  /**
+   * Request options that authenticate as the loaded agent (its credential),
+   * for broker routes that act on a session as one of its participants
+   * (recording actions, closing). Falls back to the API key when no credential
+   * is loaded, or when acting for a different agent than the loaded one.
+   */
+  private agentHttpOpts(agentId?: string) {
+    const creds = this.credentials;
+    if (creds && (!agentId || creds.agentId === agentId)) {
+      return { ...this.httpOpts, headers: { Authorization: `Bearer ${creds.credential}` } };
+    }
+    return this.httpOpts;
   }
 
   private requireCredentials(): StoredCredentials {
@@ -615,6 +626,8 @@ export class ParafeClient {
 
   /**
    * Record an action within an active session.
+   * Authenticates as the loaded agent (its credential) when `agentId` is that agent,
+   * otherwise with the API key; the broker requires the caller to be that participant.
    */
   async recordAction(opts: RecordActionOptions): Promise<RecordActionResult> {
     const body: Record<string, unknown> = {
@@ -632,7 +645,7 @@ export class ParafeClient {
       action: string;
       timestamp: string;
     }>(`${this.brokerUrl}/interaction/record`, {
-      ...this.httpOpts,
+      ...this.agentHttpOpts(opts.agentId),
       method: 'POST',
       body,
     });
@@ -650,10 +663,12 @@ export class ParafeClient {
 
   /**
    * Close an active session and receive the signed interaction receipt.
+   * Authenticates as the loaded agent (its credential), or with the API key if none
+   * is loaded; the broker requires the caller to be (or own) a participant.
    */
   async closeSession(sessionId: string): Promise<SessionReceipt> {
     const raw = await request<Record<string, unknown>>(`${this.brokerUrl}/session/close`, {
-      ...this.httpOpts,
+      ...this.agentHttpOpts(),
       method: 'POST',
       body: { session_id: sessionId },
     });

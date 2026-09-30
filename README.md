@@ -115,6 +115,10 @@ await parafe.recordAction({
 // Close the session — returns a signed receipt
 const receipt = await parafe.closeSession(sessionId);
 
+// recordAction() and closeSession() authenticate as the loaded agent (its
+// credential): the broker only lets a session's participants record actions
+// as themselves and close it.
+
 // Independently verify the receipt
 const verification = await parafe.verifyReceipt(receipt);
 // { valid: true, tamperDetected: false, signedBy: 'parafe-broker' }
