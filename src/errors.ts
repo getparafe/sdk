@@ -39,12 +39,24 @@ export class ForbiddenError extends ParafeError {
    */
   public readonly claim?: { url: string; code: string; expiresAt: string };
   public readonly hint?: string;
+  /**
+   * B18: on a handshake refused by a reputation floor (tenure_insufficient,
+   * completion_rate_insufficient, denied_requests_exceeded,
+   * counterparties_insufficient, handshake_success_rate_insufficient), which
+   * signal fell short, what the policy requires and what the agent has.
+   */
+  public readonly reputation?: { signal: string; required: number; actual: number };
 
-  constructor(message: string, code = 'forbidden', extra: { claim?: { url: string; code: string; expiresAt: string }; hint?: string } = {}) {
+  constructor(
+    message: string,
+    code = 'forbidden',
+    extra: { claim?: { url: string; code: string; expiresAt: string }; hint?: string; reputation?: { signal: string; required: number; actual: number } } = {}
+  ) {
     super(message, code, 403);
     this.name = 'ForbiddenError';
     if (extra.claim) this.claim = extra.claim;
     if (extra.hint) this.hint = extra.hint;
+    if (extra.reputation) this.reputation = extra.reputation;
   }
 }
 
@@ -113,6 +125,9 @@ export function mapBrokerError(statusCode: number, body: Record<string, unknown>
           ? { url: claim.claim_url, code: claim.code, expiresAt: String(claim.expires_at) }
           : undefined,
         hint: typeof body.hint === 'string' ? body.hint : undefined,
+        reputation: typeof body.signal === 'string' && typeof body.required === 'number' && typeof body.actual === 'number'
+          ? { signal: body.signal, required: body.required, actual: body.actual }
+          : undefined,
       });
     }
     case 404:

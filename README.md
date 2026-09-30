@@ -62,6 +62,8 @@ await target.register({ name: 'my-target', type: 'personal', owner: 'Me', scopeP
 
 Scope policies are enforced. The example above requires `minimum_verification_tier: 'email_verified'`, so a brand-new, unverified account will get `403 tier_insufficient` on `handshake()`. Verify your email in the [Developer Portal](https://platform.parafe.ai), or leave out `minimum_verification_tier` while you experiment.
 
+A policy can also set floors on the initiator's reputation signals (0.6.0): `minimum_tenure_days`, `minimum_session_completion_rate` (0–1), `maximum_denied_requests_30d`, `minimum_unique_counterparties`, `minimum_handshake_success_rate` (0–1). A handshake below one is refused with its own code (`tenure_insufficient`, `completion_rate_insufficient`, `denied_requests_exceeded`, `counterparties_insufficient`, `handshake_success_rate_insufficient`) and `ForbiddenError.reputation` says which signal and by how much. Rates are 0 for an agent with no history.
+
 Agent names must be unique — pick your own rather than copying the examples.
 
 ## Handshake Flow
@@ -289,6 +291,10 @@ try {
   if (err instanceof ForbiddenError && err.claim) {
     // Refused for identity or tier, and the agent has no owner:
     // show err.claim.url to the person it acts for (see claim links above)
+  }
+  if (err instanceof ForbiddenError && err.reputation) {
+    // Refused by a reputation floor in the target's scope policy (0.6.0), e.g.
+    // err.code 'tenure_insufficient', err.reputation { signal: 'tenure_days', required: 30, actual: 2 }
   }
   if (err instanceof RateLimitError) {
     // Back off and retry

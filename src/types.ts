@@ -51,6 +51,15 @@ export interface ScopePolicy {
   minimum_verification_tier?: 'unverified' | 'email_verified' | 'domain_verified' | 'org_verified';
   /** Require the initiator to prove it holds its key ('pop'), not just show its credential. */
   minimum_initiator_proof?: 'pop' | 'credential';
+  /** Floors on the initiator's reputation signals (broker B18). Refused with `tenure_insufficient` etc. */
+  minimum_tenure_days?: number;
+  /** 0 to 1. Sessions closed / sessions started (0 with no history). */
+  minimum_session_completion_rate?: number;
+  /** Policy refusals of the initiator's requests in the last 30 days, at most. */
+  maximum_denied_requests_30d?: number;
+  minimum_unique_counterparties?: number;
+  /** 0 to 1. Successful / all handshake events (0 with no history). */
+  minimum_handshake_success_rate?: number;
   /** Informational; stored and returned, never enforced. Any other field is refused by the broker. */
   description?: string;
 }

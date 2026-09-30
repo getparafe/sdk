@@ -119,3 +119,12 @@ describe('claim links (Phase 1.5)', () => {
     expect(err.hint).toBeUndefined();
   });
 });
+
+describe('reputation floors (B18)', () => {
+  it('a 403 from a reputation floor carries the signal, what is required and what the agent has', () => {
+    const err = mapBrokerError(403, { error: 'tenure_insufficient', message: 'too new', signal: 'tenure_days', required: 30, actual: 2 }) as ForbiddenError;
+    expect(err.code).toBe('tenure_insufficient');
+    expect(err.reputation).toEqual({ signal: 'tenure_days', required: 30, actual: 2 });
+    expect((mapBrokerError(403, { error: 'tier_insufficient', message: 'm' }) as ForbiddenError).reputation).toBeUndefined();
+  });
+});
