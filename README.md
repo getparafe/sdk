@@ -287,6 +287,8 @@ if (!status.credentialCurrent || status.ownerTier !== status.verificationTier) {
 - The agent gets the person's verification tier. If their email isn't verified yet, the tier rises once they verify it: check `getClaimStatus()` (`ownerTier` above `verificationTier`) and renew.
 - `createClaimLink()`, `getClaimStatus()` and self-renewal authenticate as the agent (credential plus proof of possession). `createClaimLink()` answers 409 `already_claimed` once the agent has an owner.
 - The person can revoke the agent from the portal like any of their agents.
+- **Key fingerprint.** The claim page shows the agent's key fingerprint so the person can check it's the agent they expect. It is the RFC 7638 JWK thumbprint of the agent's public key: the 43-character base64url SHA-256 of the canonical JWK, shown in full, not grouped. It's the same value as a consent token's `cnf.jkt`. Show the identical string on your platform with `publicKeyThumbprint(agent.publicKey)`. Don't use the credential's `pub_key_thumbprint` claim: it's a different hash (hex SHA-256 of the base64 SPKI) and won't match.
+- **Public record.** `GET https://api.parafe.ai/registry/agents/<agent_id>` (no auth) returns `registered_at`, `status`, `verification_tier`, `identity_assurance` and `owner_type` for an active agent listed publicly.
 
 ## Reputation Metrics
 
