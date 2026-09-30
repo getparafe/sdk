@@ -54,6 +54,7 @@ import type {
   ReceiptKind,
   VerifyMandateOptions,
   VerifyMandateResult,
+  MandateRef,
 } from './types.js';
 
 // Re-export everything consumers need
@@ -96,40 +97,55 @@ const authorization = {
   },
 
   /**
-   * Verified authorization — cryptographic proof of human approval.
-   * Timestamp defaults to now if omitted.
-   * Note: output key is `user_signature` (snake_case) as expected by the broker.
-   *
-   * @deprecated The broker refuses `verified` with `400 verified_evidence_unverifiable`
-   * (S-48): it can't check a bare signature string. `verified` will require a
-   * user-signed AP2 mandate that the broker verifies. Use `attested` meanwhile.
+   * Verified authorization (broker B8): an AP2 closed mandate the user signed
+   * for this purchase (human present), which the broker checks against the
+   * issuers the target's scope trusts. The mandate's merchant or payee must be
+   * the target; each mandate is redeemed once.
    */
-  verified(opts: {
-    instruction: string;
-    platform: string;
-    userSignature: string;
-    timestamp?: string;
-  }): Authorization {
-    if (!opts.instruction) {
-      throw new ValidationError('instruction is required for verified authorization', 'validation_error');
-    }
-    if (!opts.platform) {
-      throw new ValidationError('platform is required for verified authorization', 'validation_error');
-    }
-    if (!opts.userSignature) {
-      throw new ValidationError('userSignature is required for verified authorization', 'validation_error');
-    }
-    return {
-      modality: 'verified',
-      evidence: {
-        instruction: opts.instruction,
-        platform: opts.platform,
-        user_signature: opts.userSignature,
-        timestamp: opts.timestamp ?? new Date().toISOString(),
-      },
-    };
+  verified(opts: MandateAuthorizationOptions): Authorization {
+    return { modality: 'verified', evidence: mandateEvidence(opts, 'verified') };
+  },
+
+  /**
+   * Delegated authorization (broker B8): an AP2 open mandate the user signed
+   * (the limits), closed with this agent's own registered key (human not
+   * present). A scope that requires 'verified' refuses it.
+   */
+  delegated(opts: MandateAuthorizationOptions): Authorization {
+    return { modality: 'delegated', evidence: mandateEvidence(opts, 'delegated') };
   },
 };
+
+/** Options for `authorization.verified()` / `delegated()`. */
+export interface MandateAuthorizationOptions {
+  /** The AP2 mandate as presented: the `~~`-joined Delegate SD-JWT chain. */
+  mandate: string;
+  checkoutJwt?: string;
+  checkoutHash?: string;
+  checkoutMandate?: string;
+}
+
+function mandateEvidence(opts: MandateAuthorizationOptions, modality: string) {
+  if ((opts as unknown as { userSignature?: unknown }).userSignature !== undefined) {
+    throw new ValidationError(`'${modality}' no longer takes a signature string: pass the user-signed AP2 mandate (mandate)`, 'validation_error');
+  }
+  if (!opts || typeof opts.mandate !== 'string' || !opts.mandate) {
+    throw new ValidationError(`mandate (the AP2 mandate as presented) is required for ${modality} authorization`, 'validation_error');
+  }
+  return {
+    ap2_mandate: opts.mandate,
+    ...(opts.checkoutJwt ? { checkout_jwt: opts.checkoutJwt } : {}),
+    ...(opts.checkoutHash ? { checkout_hash: opts.checkoutHash } : {}),
+    ...(opts.checkoutMandate ? { checkout_mandate: opts.checkoutMandate } : {}),
+  };
+}
+
+/** The broker's mandate_refs, camelCased. */
+function mandateRefs(raw: unknown): MandateRef[] {
+  return Array.isArray(raw)
+    ? raw.map((r: Record<string, unknown>) => ({ family: r.family as MandateRef['family'], closedJwt: r.closed_jwt as string, sdHash: r.sd_hash as string }))
+    : [];
+}
 
 // ─── Receipt helpers ──────────────────────────────────────────────────────────
 
@@ -183,7 +199,7 @@ export function decodeReceipt(jws: string): SessionReceipt {
         authorization: {
           modality: auth.modality as Authorization['modality'],
           evidenceHash: (auth.evidence_hash as string) ?? null,
-          mandateRefs: (auth.mandate_refs as string[]) ?? [],
+          mandateRefs: mandateRefs(auth.mandate_refs),
         },
         initiatorProof: (ct.initiator_proof as 'pop' | 'credential') ?? null,
         initiatorProofAt: (ct.initiator_proof_at as string) ?? null,
@@ -611,6 +627,7 @@ export class ParafeClient {
       issuedAt: ct.issued_at,
       expiresAt: ct.expires_at,
       initiatorProof: ct.initiator_proof ?? null,
+      mandateRefs: mandateRefs((ct.authorization as { mandate_refs?: unknown } | undefined)?.mandate_refs),
     };
 
     return {
@@ -673,6 +690,7 @@ export class ParafeClient {
       issuedAt: ct.issued_at,
       expiresAt: ct.expires_at,
       initiatorProof: ct.initiator_proof ?? null,
+      mandateRefs: mandateRefs((ct.authorization as { mandate_refs?: unknown } | undefined)?.mandate_refs),
     };
 
     return {

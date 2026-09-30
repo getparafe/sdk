@@ -86,3 +86,12 @@ test('with only an API key, agentId is required and sent', async () => {
   expect(calls[0]!.headers.Authorization).toBe('Bearer prf_key_live_user_x');
   expect(calls[0]!.body).toMatchObject({ agent_id: 'prf_agent_shop01' });
 });
+
+test('B8: consent tokens and receipts carry mandateRefs, camelCased', async () => {
+  const p = await loaded();
+  const ref = { family: 'payment', closed_jwt: 'c', sd_hash: 's' };
+  respond = () => ({ status: 200, body: { status: 'scope_escalated', session_id: 'sess_1', consent_token: { token: 't', scope: 'pay', permissions: ['pay'], exclusions: [], authorization: { modality: 'delegated', evidence: { ap2_mandate: 'x~' }, mandate_refs: [ref] }, session_id: 'sess_1', issued_at: 'a', expires_at: 'b' } } });
+  const r = await p.escalateScope({ sessionId: 'sess_1', targetAgentId: 'prf_agent_x', scope: 'pay', permissions: ['pay'], authorization: ParafeClient.authorization.delegated({ mandate: 'x~' }) });
+  expect(calls[0]!.body).toMatchObject({ authorization: { modality: 'delegated', evidence: { ap2_mandate: 'x~' } } });
+  expect(r.consentToken.mandateRefs).toEqual([{ family: 'payment', closedJwt: 'c', sdHash: 's' }]);
+});

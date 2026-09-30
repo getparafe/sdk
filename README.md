@@ -182,9 +182,14 @@ ParafeClient.authorization.attested({
   timestamp: new Date().toISOString(), // Optional, defaults to now
 })
 
+// Delegated — an AP2 open mandate the user signed (the limits), closed with this agent's key
+ParafeClient.authorization.delegated({ mandate })
+
+// Verified — an AP2 closed mandate the user signed for this purchase
+ParafeClient.authorization.verified({ mandate, checkoutJwt })
 ```
 
-`ParafeClient.authorization.verified()` is deprecated. The broker refuses `verified` with `400 verified_evidence_unverifiable`: it can't check a bare signature string, so it won't vouch for one. `verified` will require a user-signed AP2 mandate that the broker verifies. Until then, use `attested`, and note that a scope requiring `verified` can't be reached.
+`delegated` and `verified` (broker B8) carry an [AP2](https://github.com/google-agentic-commerce/AP2) v0.2 mandate, as presented (the `~~`-joined Delegate SD-JWT chain). The broker checks it against the issuers the target's scope trusts (`ap2_trusted_issuers` in its scope policy); the mandate's merchant or payee must be the target, and each mandate is used once. `delegated` also needs the open mandate to endorse this agent's own key. From weakest to strongest: `autonomous` < `attested` < `delegated` < `verified`. The consent token and the session receipt list the mandates by hash (`mandateRefs`). A bare signature string is refused.
 
 ## AP2 mandates
 

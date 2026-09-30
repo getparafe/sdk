@@ -29,24 +29,49 @@ export interface AttestedAuthorization {
   };
 }
 
-export interface VerifiedAuthorization {
-  modality: 'verified';
-  evidence: {
-    instruction: string;
-    platform: string;
-    user_signature: string;
-    timestamp: string;
-  };
+/**
+ * Evidence for 'verified' and 'delegated' (broker B8): an AP2 mandate the
+ * broker checks against the issuers the target's scope trusts.
+ */
+export interface MandateEvidence {
+  /** The AP2 mandate as presented: the `~~`-joined Delegate SD-JWT chain. */
+  ap2_mandate: string;
+  /** The merchant-signed Checkout JWT, when the checkout mandate doesn't disclose it (or the checkout a payment mandate pays). */
+  checkout_jwt?: string;
+  checkout_hash?: string;
+  /** For a payment mandate: the checkout mandate chain it belongs to. */
+  checkout_mandate?: string;
 }
 
-export type Authorization = AutonomousAuthorization | AttestedAuthorization | VerifiedAuthorization;
+/** A closed mandate the user signed for this purchase (human present), checked by the broker. */
+export interface VerifiedAuthorization {
+  modality: 'verified';
+  evidence: MandateEvidence;
+}
+
+/** An AP2 open-mandate chain closed with the initiator's own key (human not present), checked by the broker. */
+export interface DelegatedAuthorization {
+  modality: 'delegated';
+  evidence: MandateEvidence;
+}
+
+export type Authorization = AutonomousAuthorization | AttestedAuthorization | DelegatedAuthorization | VerifiedAuthorization;
+
+/** An AP2 mandate behind a consent token, by hash both ways (broker B8). */
+export interface MandateRef {
+  family: 'checkout' | 'payment';
+  /** SHA-256 of the closed mandate JWT (the AP2 SDK's receipt reference). */
+  closedJwt: string;
+  /** sd_hash of the final SD-JWT as presented (the AP2 spec's). */
+  sdHash: string;
+}
 
 // ── Scope policies ──
 
 export interface ScopePolicy {
   permissions?: string[];
   exclusions?: string[];
-  minimum_authorization_modality?: 'autonomous' | 'attested' | 'verified';
+  minimum_authorization_modality?: 'autonomous' | 'attested' | 'delegated' | 'verified';
   minimum_identity_assurance?: 'self_registered' | 'registered' | 'claimed';
   minimum_verification_tier?: 'unverified' | 'email_verified' | 'domain_verified' | 'org_verified';
   /** Require the initiator to prove it holds its key ('pop'), not just show its credential. */
@@ -60,6 +85,8 @@ export interface ScopePolicy {
   minimum_unique_counterparties?: number;
   /** 0 to 1. Successful / all handshake events (0 with no history). */
   minimum_handshake_success_rate?: number;
+  /** AP2 mandate issuers this scope accepts for 'delegated' and 'verified' (broker B8), as public JWKs. */
+  ap2_trusted_issuers?: Ap2TrustedIssuer[];
   /** Informational; stored and returned, never enforced. Any other field is refused by the broker. */
   description?: string;
 }
@@ -184,6 +211,8 @@ export interface ConsentTokenDetail {
   expiresAt: string;
   /** How the initiator proved itself: 'pop' (proof signed with its key) or 'credential'. */
   initiatorProof?: 'pop' | 'credential' | null;
+  /** The AP2 mandates behind 'delegated' / 'verified' (empty otherwise). */
+  mandateRefs: MandateRef[];
 }
 
 export interface CompleteHandshakeResult {
@@ -355,9 +384,10 @@ export interface ReceiptConsentToken {
   exclusions: string[];
   authorization: {
     modality: Authorization['modality'];
-    /** Hash of the human's instruction (the text itself is not on the receipt). */
+    /** Hash of the evidence: the human's instruction, or the AP2 mandate (neither is on the receipt). */
     evidenceHash: string | null;
-    mandateRefs: string[];
+    /** The AP2 mandates behind 'delegated' / 'verified' (broker B8). */
+    mandateRefs: MandateRef[];
   };
   initiatorProof: 'pop' | 'credential' | null;
   initiatorProofAt: string | null;

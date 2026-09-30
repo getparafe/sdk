@@ -115,27 +115,19 @@ describe('ParafeClient.authorization helpers', () => {
     ).toThrow(ValidationError);
   });
 
-  it('verified() returns correct shape with snake_case user_signature', () => {
-    const auth = ParafeClient.authorization.verified({
-      instruction: 'User approved',
-      platform: 'web',
-      userSignature: 'sig-abc',
-    });
-    expect(auth.modality).toBe('verified');
-    if (auth.modality === 'verified') {
-      expect(auth.evidence.user_signature).toBe('sig-abc');
-      expect(typeof auth.evidence.timestamp).toBe('string');
-    }
+  it('verified() and delegated() carry the AP2 mandate as evidence (B8)', () => {
+    const v = ParafeClient.authorization.verified({ mandate: 'root~', checkoutJwt: 'cj' });
+    expect(v).toEqual({ modality: 'verified', evidence: { ap2_mandate: 'root~', checkout_jwt: 'cj' } });
+    const d = ParafeClient.authorization.delegated({ mandate: 'open~~closed~', checkoutMandate: 'co~' });
+    expect(d).toEqual({ modality: 'delegated', evidence: { ap2_mandate: 'open~~closed~', checkout_mandate: 'co~' } });
   });
 
-  it('verified() throws ValidationError when userSignature is missing', () => {
+  it('verified() refuses a bare signature string or a missing mandate', () => {
     expect(() =>
-      ParafeClient.authorization.verified({
-        instruction: 'ok',
-        platform: 'app',
-        userSignature: '',
-      })
-    ).toThrow(ValidationError);
+      // A pre-B8 caller: the broker never accepted this.
+      ParafeClient.authorization.verified({ instruction: 'ok', platform: 'app', userSignature: 'sig' } as never)
+    ).toThrow(/AP2 mandate/);
+    expect(() => ParafeClient.authorization.delegated({ mandate: '' })).toThrow(ValidationError);
   });
 });
 
