@@ -337,7 +337,7 @@ function mandateResult(raw: Record<string, unknown>): VerifyMandateResult {
     out.violations = (raw.violations as string[]) ?? [];
   }
   if (raw.issuer) out.issuer = raw.issuer as VerifyMandateResult['issuer'];
-  for (const [from, to] of [['audience', 'audience'], ['nonce', 'nonce'], ['presented_at', 'presentedAt'], ['checkout_hash', 'checkoutHash'], ['transaction_id', 'transactionId'], ['agent_key_thumbprint', 'agentKeyThumbprint']] as const) {
+  for (const [from, to] of [['audience', 'audience'], ['nonce', 'nonce'], ['presented_at', 'presentedAt'], ['checkout_hash', 'checkoutHash'], ['transaction_id', 'transactionId'], ['agent_key_thumbprint', 'agentKeyThumbprint'], ['closed_by', 'closedBy'], ['closed_by_key_thumbprint', 'closedByKeyThumbprint'], ['opened_by', 'openedBy'], ['opened_by_key_thumbprint', 'openedByKeyThumbprint']] as const) {
     if (raw[from] !== undefined) (out as unknown as Record<string, unknown>)[to] = raw[from];
   }
   if (raw.closed_mandate) out.closedMandate = raw.closed_mandate as Record<string, unknown>;

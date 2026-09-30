@@ -166,3 +166,11 @@ test('P-38: acks, index entries and decoded receipt actions carry the A3 mandate
   const { decodeReceipt } = await import('../src/index.js');
   expect(decodeReceipt(receiptJws).actions[0]).toMatchObject({ referenceVerified: true, mandateRef: 'c', mandateIssuerSource: 'request' });
 });
+
+test('P-43: verifyMandate() keeps who signed the closed and the first open mandate', async () => {
+  respond = () => ({ status: 200, body: { ...valid, closed_by: 'open_mandate_key', closed_by_key_thumbprint: 'k1', opened_by: 'issuer', opened_by_key_thumbprint: 'k2' } });
+  const r = await (await loaded()).verifyMandate({ mandate: 'a~' });
+  expect(r).toMatchObject({ closedBy: 'open_mandate_key', closedByKeyThumbprint: 'k1', openedBy: 'issuer', openedByKeyThumbprint: 'k2' });
+  respond = () => ({ status: 200, body: { valid: false, error: 'invalid_credential', reason: 'agent_signed_for_user', message: 'm', violations: [], opened_by: 'credential_holder', opened_by_key_thumbprint: 'k3', references: null, agent: null, redemption: null } });
+  expect(await (await loaded()).verifyMandate({ mandate: 'a~' })).toMatchObject({ valid: false, reason: 'agent_signed_for_user', openedBy: 'credential_holder', openedByKeyThumbprint: 'k3' });
+});

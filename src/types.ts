@@ -695,6 +695,16 @@ export interface VerifyMandateResult {
   closedMandate?: Record<string, unknown>;
   openMandates?: Record<string, unknown>[];
   agentKeyThumbprint?: string | null;
+  /**
+   * Who signed the closed mandate: `issuer` (the trusted issuer itself),
+   * `credential_holder` (the holder of a trusted credential, in AP2's User
+   * Credential model normally the user) or `open_mandate_key` (an agent).
+   */
+  closedBy?: 'issuer' | 'credential_holder' | 'open_mandate_key' | null;
+  closedByKeyThumbprint?: string | null;
+  /** Who signed the first open mandate (the user's limits), in the same terms: `issuer` or `credential_holder`. */
+  openedBy?: 'issuer' | 'credential_holder' | null;
+  openedByKeyThumbprint?: string | null;
   /** The registered Parafé agent whose key is the mandate's agent key (human not present). */
   agent: MandateAgentMatch | null;
   redemption: MandateRedemption | null;
