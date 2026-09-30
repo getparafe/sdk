@@ -226,7 +226,7 @@ const receipt = await parafe.recordAp2Receipt(sessionId, r.valid
 // return receipt.receipt to the shopping agent
 ```
 
-AP2's spec and its SDK compute the receipt's `reference` differently; the receipt uses the AP2 SDK's form by default (`referenceForm: 'sd_hash'` for the spec's), and `receipt.references` gives both. The broker checks it against the mandates you (or the handshake) verified in the session: `ack.referenceVerified`, with `mandateVerifiedBy` and `mandateIssuerSource`. A mandate the other participant verified doesn't count for your receipts.
+AP2's spec and its SDK compute the receipt's `reference` differently; the receipt uses the AP2 SDK's form by default (`referenceForm: 'sd_hash'` for the spec's), and `receipt.references` gives both. The broker checks it against the mandates verified in the session: `ack.referenceVerified`, with `mandateVerifiedBy` and `mandateIssuerSource` (`scope_policy`, `broker` or `request`). A mandate checked at the handshake counts for both participants' receipts; one verified with `verifyMandate()` counts only for the receipts of the agent that verified it, and the other participant's verifications don't count for yours. Read `referenceVerified` with those two fields: it is as strong as the verifier's trust list. `scope_policy` (the risk-bearer's own list, at the handshake) is the strong case; `request` means the verifier chose the issuers itself.
 
 ## Agent Lifecycle
 
