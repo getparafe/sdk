@@ -211,6 +211,17 @@ if (!r.valid) {
 
 The broker checks the chain against the issuers you trust (plus its own list), every constraint, and the checkout binding, and records the redemption: the same mandate, or another one for the same checkout, presented again returns `alreadyRedeemed: true`. `r.agent` names the registered Parafé agent whose key signed the mandate (human not present), with `isCounterparty` in a session. To verify offline instead, use `verifyAp2Mandate` from `@getparafe/verify`.
 
+Once you've accepted or rejected the mandate, AP2 says you MUST return a Checkout Receipt (a payment processor: a Payment Receipt). Sign it as your agent (it needs a P-256 key) and file it in the session:
+
+```typescript
+const receipt = await parafe.recordAp2Receipt(sessionId, r.valid
+  ? { kind: 'checkout', mandate, orderId }
+  : { kind: 'checkout', mandate, error: r.error, errorDescription: r.message });
+// return receipt.receipt to the shopping agent
+```
+
+AP2's spec and its SDK compute the receipt's `reference` differently; the receipt uses the AP2 SDK's form by default (`referenceForm: 'sd_hash'` for the spec's), and `receipt.references` gives both. The broker checks it against the mandates verified in the session (`reference_verified` on the index entry).
+
 ## Agent Lifecycle
 
 ```typescript

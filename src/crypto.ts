@@ -155,3 +155,33 @@ export async function signActionReceipt(
     .setJti(nodeCrypto.randomUUID())
     .sign(privateKey);
 }
+
+// ── AP2 v0.2 receipts (A3) ──
+
+/**
+ * AP2's spec and its SDK compute a receipt's `reference` differently: the spec
+ * hashes the final SD-JWT like `sd_hash` (with its `_sd_alg`); the AP2 Python
+ * SDK hashes only the closed mandate's JWT (SHA-256). Both, for a mandate as
+ * presented (a `~~`-joined chain or one SD-JWT). Doesn't verify the mandate.
+ */
+export function ap2MandateReferences(mandate: string): { sdHash: string; closedJwt: string } {
+  if (typeof mandate !== 'string' || !mandate.endsWith('~')) {
+    throw new TypeError('An AP2 mandate as presented is an SD-JWT (or ~~-joined chain) ending in "~"');
+  }
+  const last = mandate.split('~~').pop() as string;
+  const jwt = last.split('~')[0] as string;
+  const sdAlg = jose.decodeJwt(jwt)._sd_alg;
+  const hash = { 'sha-256': 'sha256', 'sha-384': 'sha384', 'sha-512': 'sha512' }[typeof sdAlg === 'string' ? sdAlg.toLowerCase() : 'sha-256'];
+  if (!hash) throw new TypeError(`Unsupported _sd_alg "${String(sdAlg)}"`);
+  return {
+    sdHash: nodeCrypto.createHash(hash).update(last, 'ascii').digest('base64url'),
+    closedJwt: nodeCrypto.createHash('sha256').update(jwt, 'ascii').digest('base64url'),
+  };
+}
+
+/** Sign AP2 receipt claims (ES256; AP2's only algorithm, so the key must be P-256). */
+export async function signAp2ReceiptJws(privateKeyBase64: string, claims: Record<string, unknown>, kid?: string): Promise<string> {
+  const key = loadPrivateKey(privateKeyBase64);
+  if (keyAlg(key) !== 'ES256') throw new TypeError('AP2 receipts are signed ES256: the agent needs a P-256 key');
+  return new jose.SignJWT(claims).setProtectedHeader({ alg: 'ES256', typ: 'JWT', ...(kid ? { kid } : {}) }).sign(key);
+}

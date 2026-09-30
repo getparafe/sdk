@@ -664,6 +664,40 @@ export interface VerifyMandateResult {
   redemption: MandateRedemption | null;
 }
 
+// ── AP2 receipts (signAp2Receipt(), A3) ──
+
+export interface SignAp2ReceiptOptions {
+  kind: 'checkout' | 'payment';
+  /** The mandate the receipt answers, as presented; or pass `references`. */
+  mandate?: string;
+  references?: Ap2References;
+  /** Which form goes in `reference`. Default 'closed_jwt' (what the AP2 SDK checks); 'sd_hash' for the spec's. */
+  referenceForm?: 'closed_jwt' | 'sd_hash';
+  /** The receipt's issuer (the merchant or payment processor). Default: the agent's DID. */
+  iss?: string;
+  /** Default 'Success', or 'Error' when `error` is set. */
+  status?: 'Success' | 'Error';
+  /** The AP2 error code, e.g. from verifyMandate(): invalid_credential, unresolved_constraint, invalid_mandate. */
+  error?: string;
+  errorDescription?: string;
+  /** Checkout, Success. */
+  orderId?: string;
+  /** Payment: always. */
+  paymentId?: string;
+  /** Payment, Success. */
+  pspConfirmationId?: string;
+  networkConfirmationId?: string;
+}
+
+export interface Ap2Receipt {
+  /** The receipt JWT (ES256). Return it to the shopping agent. */
+  receipt: string;
+  kind: 'ap2.checkout_receipt' | 'ap2.payment_receipt';
+  reference: string;
+  references: Ap2References;
+  claims: Record<string, unknown>;
+}
+
 // ── Encrypted credential file format ──
 
 export interface EncryptedCredentialFile {

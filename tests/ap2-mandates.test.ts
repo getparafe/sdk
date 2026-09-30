@@ -1,15 +1,17 @@
 /**
- * Unit tests for SDK 0.7.0 (AP2 change request A1): verifyMandate() calls the
- * broker's POST /ap2/mandates/verify. No network: fetch is stubbed.
+ * Unit tests for SDK 0.7.0 (AP2 change request A1, B8, A3): verifyMandate()
+ * (the broker's POST /ap2/mandates/verify), mandateRefs, AP2 receipts. No
+ * network: fetch is stubbed. AP2 vectors: tests/fixtures/ap2-sdk-vectors.json.
  */
 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { rm } from 'node:fs/promises';
-import { generateKeyPairSync, createPublicKey } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { generateKeyPairSync, createPublicKey, createPrivateKey, createHash } from 'node:crypto';
 import { jest } from '@jest/globals';
 import * as jose from 'jose';
-import { ParafeClient } from '../src/index.js';
+import { ParafeClient, ap2MandateReferences, ValidationError } from '../src/index.js';
 import { encryptCredentials } from '../src/credentials.js';
 
 const key = generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey;
@@ -94,4 +96,55 @@ test('B8: consent tokens and receipts carry mandateRefs, camelCased', async () =
   const r = await p.escalateScope({ sessionId: 'sess_1', targetAgentId: 'prf_agent_x', scope: 'pay', permissions: ['pay'], authorization: ParafeClient.authorization.delegated({ mandate: 'x~' }) });
   expect(calls[0]!.body).toMatchObject({ authorization: { modality: 'delegated', evidence: { ap2_mandate: 'x~' } } });
   expect(r.consentToken.mandateRefs).toEqual([{ family: 'payment', closedJwt: 'c', sdHash: 's' }]);
+});
+
+// ── A3: AP2 receipts ──
+
+const fx = JSON.parse(readFileSync(new URL('./fixtures/ap2-sdk-vectors.json', import.meta.url), 'utf8'));
+const checkoutVector = fx.vectors.find((v: { id: string }) => v.id === 'hnp-checkout');
+const DID = 'did:web:broker.test:agents:prf_agent_shop01';
+
+async function merchant(): Promise<ParafeClient> {
+  const k = createPrivateKey({ key: fx.keys.merchant, format: 'jwk' });
+  const file = join(tmpdir(), `parafe-ap2r-${Date.now()}-${Math.random().toString(36).slice(2)}.enc`);
+  const p = new ParafeClient({ brokerUrl: 'https://broker.test', retries: 0 });
+  await encryptCredentials(file, {
+    agentId: 'prf_agent_shop01', agentName: 'shop', credential: 'cred.jwt.sig',
+    credentialSdJwt: `${jose.base64url.encode('{"alg":"ES256"}')}.${jose.base64url.encode(JSON.stringify({ sub: DID }))}.sig~`,
+    publicKey: createPublicKey(k).export({ type: 'spki', format: 'der' }).toString('base64'),
+    privateKey: k.export({ type: 'pkcs8', format: 'der' }).toString('base64'),
+    issuedAt: '2026-09-30T00:00:00.000Z', expiresAt: '2099-01-01T00:00:00.000Z',
+  }, 'pass');
+  await p.loadCredentials(file, 'pass');
+  await rm(file, { force: true });
+  return p;
+}
+
+test("A3: ap2MandateReferences matches the AP2 SDK's reference on every vector", () => {
+  for (const v of fx.vectors) {
+    const refs = ap2MandateReferences(v.chain);
+    expect(refs.closedJwt).toBe(v.sdk_reference);
+    expect(refs.sdHash).toBe(createHash('sha256').update((v.chain as string).split('~~').pop() as string).digest('base64url'));
+  }
+});
+
+test('A3: signAp2Receipt signs a checkout receipt as the agent (ES256, kid, iss = DID); rejections too', async () => {
+  const p = await merchant();
+  const ok = await p.signAp2Receipt({ kind: 'checkout', mandate: checkoutVector.chain, orderId: 'ord_1' });
+  const { d: _d, ...pubJwk } = fx.keys.merchant;
+  const { payload, protectedHeader } = await jose.jwtVerify(ok.receipt, await jose.importJWK(pubJwk, 'ES256'));
+  expect(protectedHeader).toMatchObject({ alg: 'ES256', typ: 'JWT', kid: `${DID}#keys-1` });
+  expect(payload).toMatchObject({ status: 'Success', iss: DID, reference: checkoutVector.sdk_reference, order_id: 'ord_1' });
+  const err = await p.signAp2Receipt({ kind: 'checkout', mandate: checkoutVector.chain, error: 'invalid_mandate', errorDescription: 'no stock', referenceForm: 'sd_hash', iss: 'https://shop.example' });
+  expect(err.claims).toMatchObject({ status: 'Error', iss: 'https://shop.example', reference: err.references.sdHash, error: 'invalid_mandate' });
+  await expect(p.signAp2Receipt({ kind: 'payment', mandate: checkoutVector.chain, paymentId: 'p' })).rejects.toThrow(ValidationError);
+});
+
+test('A3: recordAp2Receipt files it with its kind', async () => {
+  respond = () => ({ status: 201, body: { session_id: 'sess_1', seq: 3, receipt_hash: 'h', entry_hash: 'e', acknowledgment: 'x.eyJ9.y', claims: {} } });
+  const p = await merchant();
+  const r = await p.recordAp2Receipt('sess_1', { kind: 'checkout', mandate: checkoutVector.chain, orderId: 'ord_2' });
+  expect(calls[0]!.url).toBe('https://broker.test/sessions/sess_1/action-receipts');
+  expect(calls[0]!.body).toEqual({ receipt: r.receipt, kind: 'ap2.checkout_receipt' });
+  expect(r.ack.seq).toBe(3);
 });

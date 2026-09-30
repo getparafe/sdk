@@ -10,7 +10,7 @@
  *   });
  */
 
-import { generateKeyPair, signChallenge, signProof, createPresentationProof, signActionReceipt as signActionReceiptJws, sha256b64u, jsonHash } from './crypto.js';
+import { generateKeyPair, signChallenge, signProof, createPresentationProof, signActionReceipt as signActionReceiptJws, sha256b64u, jsonHash, ap2MandateReferences, signAp2ReceiptJws } from './crypto.js';
 import { encryptCredentials, decryptCredentials } from './credentials.js';
 import { request } from './http.js';
 import { ValidationError, AuthError, NotFoundError, ParafeError, ConflictError } from './errors.js';
@@ -55,13 +55,15 @@ import type {
   VerifyMandateOptions,
   VerifyMandateResult,
   MandateRef,
+  SignAp2ReceiptOptions,
+  Ap2Receipt,
 } from './types.js';
 
 // Re-export everything consumers need
 export { ValidationError, AuthError, ForbiddenError, NotFoundError,
          ConflictError, ExpiredError, RateLimitError, InternalError,
          NetworkError, ParafeError } from './errors.js';
-export { generateKeyPair, signChallenge, signProof, createPresentationProof, publicKeyThumbprint, jcs, jsonHash, sha256b64u } from './crypto.js';
+export { generateKeyPair, signChallenge, signProof, createPresentationProof, publicKeyThumbprint, jcs, jsonHash, sha256b64u, ap2MandateReferences } from './crypto.js';
 export type { KeyAlgorithm, KeyPair } from './crypto.js';
 export * from './types.js';
 
@@ -248,6 +250,36 @@ function receiptFromResponse(raw: Record<string, unknown>): SessionReceipt | Leg
 }
 
 // ─── ParafeClient ─────────────────────────────────────────────────────────────
+
+/** AP2 receipt claims per AP2's checkout_receipt.json / payment_receipt.json. */
+function ap2ReceiptClaims(opts: SignAp2ReceiptOptions, iss: string, reference: string): Record<string, unknown> {
+  const bad = (m: string) => new ValidationError(m, 'validation_error');
+  const status = opts.status ?? (opts.error ? 'Error' : 'Success');
+  if (opts.kind !== 'checkout' && opts.kind !== 'payment') throw bad("kind must be 'checkout' or 'payment'");
+  const claims: Record<string, unknown> = { status, iss, iat: Math.floor(Date.now() / 1000), reference };
+  if (status === 'Error') {
+    if (!opts.error || !opts.errorDescription) throw bad('An Error receipt needs error and errorDescription');
+    claims.error = opts.error;
+    claims.error_description = opts.errorDescription;
+  } else if (opts.error) {
+    throw bad('A Success receipt has no error');
+  }
+  if (opts.kind === 'checkout') {
+    if (status === 'Success') {
+      if (!opts.orderId) throw bad('A Success checkout receipt needs orderId');
+      claims.order_id = opts.orderId;
+    }
+  } else {
+    if (!opts.paymentId) throw bad('A payment receipt needs paymentId');
+    claims.payment_id = opts.paymentId;
+    if (status === 'Success') {
+      if (!opts.pspConfirmationId || !opts.networkConfirmationId) throw bad('A Success payment receipt needs pspConfirmationId and networkConfirmationId');
+      claims.psp_confirmation_id = opts.pspConfirmationId;
+      claims.network_confirmation_id = opts.networkConfirmationId;
+    }
+  }
+  return claims;
+}
 
 /** The broker's /ap2/mandates/verify response, camelCased. */
 function mandateResult(raw: Record<string, unknown>): VerifyMandateResult {
@@ -1040,6 +1072,40 @@ export class ParafeClient {
       if (err instanceof ConflictError && err.body && err.body.reason === 'already_redeemed') return mandateResult(err.body);
       throw err;
     }
+  }
+
+  /**
+   * Sign an AP2 Checkout or Payment Receipt as the loaded agent (AP2 change
+   * request A3): once a merchant has accepted or rejected a mandate, AP2 says
+   * it MUST return a receipt. ES256, so the agent needs a P-256 key.
+   * `reference` is the AP2 SDK's form by default; `references` gives both.
+   */
+  async signAp2Receipt(opts: SignAp2ReceiptOptions): Promise<Ap2Receipt> {
+    const creds = this.requireCredentials();
+    let references = opts.references;
+    try {
+      references = references ?? (opts.mandate ? ap2MandateReferences(opts.mandate) : undefined);
+    } catch (err) {
+      throw new ValidationError((err as Error).message, 'validation_error');
+    }
+    if (!references) throw new ValidationError('Pass the mandate the receipt answers (mandate) or its references', 'validation_error');
+    const reference = (opts.referenceForm ?? 'closed_jwt') === 'sd_hash' ? references.sdHash : references.closedJwt;
+    const did = await this.agentDid();
+    const claims = ap2ReceiptClaims(opts, opts.iss ?? did, reference);
+    let receipt: string;
+    try {
+      receipt = await signAp2ReceiptJws(creds.privateKey, claims, `${did}#keys-1`);
+    } catch (err) {
+      throw new ValidationError((err as Error).message, 'validation_error');
+    }
+    return { receipt, kind: opts.kind === 'checkout' ? 'ap2.checkout_receipt' : 'ap2.payment_receipt', reference, references, claims };
+  }
+
+  /** Sign an AP2 receipt (see `signAp2Receipt`) and file it in the session's index. */
+  async recordAp2Receipt(sessionId: string, opts: SignAp2ReceiptOptions): Promise<Ap2Receipt & { ack: ActionReceiptAck }> {
+    const signed = await this.signAp2Receipt(opts);
+    const ack = await this.fileActionReceipt(sessionId, signed.receipt, { kind: signed.kind });
+    return { ...signed, ack };
   }
 
   // ── Interaction recording (before B6) ────────────────────────────────────────
