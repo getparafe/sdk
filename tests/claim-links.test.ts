@@ -84,6 +84,17 @@ describe('claim links (Phase 1.5)', () => {
     expect(claims).toMatchObject({ htm: 'POST', htu: calls[0].url, agent_id: CREDS.agentId });
   });
 
+  it('getClaimStatus() returns ownerEmail only when the broker shares it', async () => {
+    respond = () => ({ status: 200, body: {
+      claimed: true, identity_assurance: 'claimed', verification_tier: 'email_verified', owner_tier: 'email_verified', credential_current: true,
+      registered_at: '2026-09-30T12:00:00.000Z', owner_email: 'alex@example.com', owner_email_verified: true,
+    } });
+    const client = await clientWithCredentials();
+    const status = await client.getClaimStatus();
+    expect(status.ownerEmail).toBe('alex@example.com');
+    expect(status.ownerEmailVerified).toBe(true);
+  });
+
   it('getClaimStatus() maps the status and signs a GET proof', async () => {
     respond = () => ({ status: 200, body: {
       claimed: true, identity_assurance: 'claimed', verification_tier: 'unverified', owner_tier: 'email_verified', credential_current: false,

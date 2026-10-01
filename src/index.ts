@@ -521,6 +521,8 @@ export class ParafeClient {
       owner_tier: string | null;
       credential_current: boolean;
       registered_at: string;
+      owner_email?: string;
+      owner_email_verified?: boolean;
     }>(url, {
       timeout: this.timeout,
       retries: this.retries,
@@ -534,6 +536,7 @@ export class ParafeClient {
       ownerTier: raw.owner_tier ?? null,
       credentialCurrent: raw.credential_current,
       registeredAt: raw.registered_at,
+      ...(raw.owner_email !== undefined ? { ownerEmail: raw.owner_email, ownerEmailVerified: Boolean(raw.owner_email_verified) } : {}),
     };
   }
 
