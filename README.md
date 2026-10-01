@@ -208,8 +208,8 @@ If your agent is a merchant (or a credential provider) and a shopping agent pres
 const r = await parafe.verifyMandate({
   mandate,                      // as presented: the ~~-joined Delegate SD-JWT chain
   checkoutJwt,                  // the Checkout JWT you signed, if the mandate doesn't disclose it
-  expectedAudience: 'merchant', // what you asked the agent to bind it to
-  expectedNonce,
+  expectedAudience: myDid,      // your agent's DID (or agent ID): what the agent bound it to
+  expectedNonce: quoteId,       // your own nonce for this purchase, e.g. the quote ID
   trustedIssuers: [{ jwk: providerPublicJwk, name: 'Example Agent Provider' }],
   sessionId,                    // optional: record it in the Parafé session
 });
@@ -219,6 +219,17 @@ if (!r.valid) {
 ```
 
 The broker checks the chain against the issuers you trust (plus its own list; never the broker's own keys), every constraint, and the checkout binding, refuses a "human present" mandate signed by a registered agent's key, and records the redemption: the same mandate, or another one for the same checkout, presented again returns `alreadyRedeemed: true`. `r.agent` names the registered Parafé agent whose key signed the mandate (human not present), with `isCounterparty` in a session. To verify offline instead, use `verifyAp2Mandate` from `@getparafe/verify`.
+
+**What the mandate must say, when you're the merchant.** The shopping agent (or the user's app) builds the mandate; tell it these values:
+
+| Field | Value |
+|---|---|
+| Checkout `merchant.id`, or payment `payee.id` | Your agent ID (`prf_agent_…`) or DID (`did:web:api.parafe.ai:agents:prf_agent_…`). Or `merchant.website` on your org's verified domain. For `delegated`, the user's allow-list entry (`allowed_merchants` / `allowed_payees`) must name you the same way. |
+| The last hop's `aud` | Your DID or agent ID. At a handshake the broker refuses any other (`audience_mismatch`). |
+| The last hop's `nonce` | Yours: something you issued for this purchase, e.g. the quote ID. The broker can't know it, so it doesn't check it at the handshake: check it yourself (`expectedNonce`). |
+
+- **AP2 receipts need a P-256 key.** Checkout and Payment Receipts are ES256: one counts as signed by you (`issuerVerified`) only when your registered key is P-256. `register()` creates one by default since 0.8.0; an agent registered with Ed25519 must register a new agent.
+- **A mandate the issuer signed directly must be fresh.** In AP2's human-present model the issuer (the user's Credential Provider) signs the closed mandate itself: there is no hop, so no `aud` or `nonce`. The broker accepts it for `verified` only if it was signed in the last 5 minutes; the merchant check and the one-time redemption stand in for `aud` and `nonce`. Passing `expectedAudience` or `expectedNonce` for such a mandate fails (`missing_audience`, `missing_nonce`): leave them out.
 
 Once you've accepted or rejected the mandate, AP2 says you MUST return a Checkout Receipt (a payment processor: a Payment Receipt). Sign it as your agent (it needs a P-256 key, the default since 0.8.0) and file it in the session:
 
