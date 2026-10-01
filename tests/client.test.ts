@@ -178,6 +178,7 @@ describe('Full integration flow', () => {
     expect(typeof result.credential).toBe('string');
     expect(typeof result.publicKey).toBe('string');
     expect(typeof result.privateKey).toBe('string');
+    expect(Buffer.from(result.publicKey, 'base64').length).toBe(91); // P-256 SPKI, the default since 0.8.0
     expect(typeof result.issuedAt).toBe('string');
     expect(typeof result.expiresAt).toBe('string');
 
@@ -446,12 +447,13 @@ describe('Full integration flow', () => {
     await iniClient.closeSession(completed.sessionId);
   });
 
-  test('a P-256 agent (A2) runs the whole flow', async () => {
+  test('an Ed25519 agent (no longer the default, still accepted) runs the whole flow', async () => {
     const ini = makeClient();
     const tgt = makeClient();
-    const iniReg = await ini.register({ name: uniqueName('sdk-p256-ini'), type: 'enterprise', owner: 'SDK Test Suite', keyAlgorithm: 'P-256' });
+    const iniReg = await ini.register({ name: uniqueName('sdk-ed25519-ini'), type: 'enterprise', owner: 'SDK Test Suite', keyAlgorithm: 'Ed25519' });
     expect(iniReg.credentialSdJwt).toBeTruthy();
-    const tgtReg = await tgt.register({ name: uniqueName('sdk-p256-tgt'), type: 'enterprise', owner: 'SDK Test Suite', keyAlgorithm: 'P-256', scopePolicies: { s: { permissions: ['read'], minimum_initiator_proof: 'pop' } } });
+    expect(Buffer.from(iniReg.publicKey, 'base64').length).toBe(44); // Ed25519 SPKI
+    const tgtReg = await tgt.register({ name: uniqueName('sdk-ed25519-tgt'), type: 'enterprise', owner: 'SDK Test Suite', keyAlgorithm: 'Ed25519', scopePolicies: { s: { permissions: ['read'], minimum_initiator_proof: 'pop' } } });
     const hs = await ini.handshake({ targetAgentId: tgtReg.agentId, scope: 's', permissions: ['read'] });
     const done = await tgt.completeHandshake({ handshakeId: hs.handshakeId, challengeNonce: hs.challengeForTarget });
     expect(done.consentToken.initiatorProof).toBe('pop');

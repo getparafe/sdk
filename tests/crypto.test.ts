@@ -1,13 +1,21 @@
 /**
- * Unit tests for Ed25519 key generation and challenge signing.
+ * Unit tests for agent key generation (P-256 by default, Ed25519) and challenge signing.
  */
 
 import * as nodeCrypto from 'node:crypto';
 import { generateKeyPair, signChallenge, loadPrivateKey } from '../src/crypto.js';
 
 describe('generateKeyPair', () => {
-  it('returns base64-encoded publicKey and privateKey strings', () => {
+  it('defaults to P-256 (0.8.0)', () => {
     const { publicKey, privateKey } = generateKeyPair();
+    const pub = nodeCrypto.createPublicKey({ key: Buffer.from(publicKey, 'base64'), format: 'der', type: 'spki' });
+    expect(pub.asymmetricKeyType).toBe('ec');
+    expect(pub.asymmetricKeyDetails?.namedCurve).toBe('prime256v1');
+    expect(loadPrivateKey(privateKey).asymmetricKeyType).toBe('ec');
+  });
+
+  it('returns base64-encoded publicKey and privateKey strings', () => {
+    const { publicKey, privateKey } = generateKeyPair('Ed25519');
     expect(typeof publicKey).toBe('string');
     expect(typeof privateKey).toBe('string');
     expect(publicKey.length).toBeGreaterThan(0);
@@ -15,22 +23,22 @@ describe('generateKeyPair', () => {
   });
 
   it('generates valid Ed25519 SPKI DER public key', () => {
-    const { publicKey } = generateKeyPair();
+    const { publicKey } = generateKeyPair('Ed25519');
     const buf = Buffer.from(publicKey, 'base64');
     const key = nodeCrypto.createPublicKey({ key: buf, format: 'der', type: 'spki' });
     expect(key.asymmetricKeyType).toBe('ed25519');
   });
 
   it('generates valid Ed25519 PKCS8 DER private key', () => {
-    const { privateKey } = generateKeyPair();
+    const { privateKey } = generateKeyPair('Ed25519');
     const buf = Buffer.from(privateKey, 'base64');
     const key = nodeCrypto.createPrivateKey({ key: buf, format: 'der', type: 'pkcs8' });
     expect(key.asymmetricKeyType).toBe('ed25519');
   });
 
   it('generates unique key pairs each call', () => {
-    const pair1 = generateKeyPair();
-    const pair2 = generateKeyPair();
+    const pair1 = generateKeyPair('Ed25519');
+    const pair2 = generateKeyPair('Ed25519');
     expect(pair1.publicKey).not.toBe(pair2.publicKey);
     expect(pair1.privateKey).not.toBe(pair2.privateKey);
   });
@@ -38,7 +46,7 @@ describe('generateKeyPair', () => {
 
 describe('loadPrivateKey', () => {
   it('reconstructs a KeyObject from a base64 PKCS8 DER buffer', () => {
-    const { privateKey } = generateKeyPair();
+    const { privateKey } = generateKeyPair('Ed25519');
     const keyObj = loadPrivateKey(privateKey);
     expect(keyObj.asymmetricKeyType).toBe('ed25519');
     expect(keyObj.type).toBe('private');
@@ -47,7 +55,7 @@ describe('loadPrivateKey', () => {
 
 describe('signChallenge', () => {
   it('returns a non-empty base64 string', () => {
-    const { privateKey } = generateKeyPair();
+    const { privateKey } = generateKeyPair('Ed25519');
     // Generate a realistic 32-byte (64-char hex) challenge nonce
     const challengeNonce = nodeCrypto.randomBytes(32).toString('hex');
     const sig = signChallenge(challengeNonce, privateKey);
@@ -59,7 +67,7 @@ describe('signChallenge', () => {
   });
 
   it('produces a signature verifiable with the matching public key', () => {
-    const { publicKey, privateKey } = generateKeyPair();
+    const { publicKey, privateKey } = generateKeyPair('Ed25519');
     const challengeNonce = nodeCrypto.randomBytes(32).toString('hex');
     const sig = signChallenge(challengeNonce, privateKey);
 
@@ -76,7 +84,7 @@ describe('signChallenge', () => {
   });
 
   it('produces different signatures for different challenges', () => {
-    const { privateKey } = generateKeyPair();
+    const { privateKey } = generateKeyPair('Ed25519');
     const nonce1 = nodeCrypto.randomBytes(32).toString('hex');
     const nonce2 = nodeCrypto.randomBytes(32).toString('hex');
     const sig1 = signChallenge(nonce1, privateKey);
@@ -85,8 +93,8 @@ describe('signChallenge', () => {
   });
 
   it('signature fails verification with a different public key', () => {
-    const pair1 = generateKeyPair();
-    const pair2 = generateKeyPair();
+    const pair1 = generateKeyPair('Ed25519');
+    const pair2 = generateKeyPair('Ed25519');
     const nonce = nodeCrypto.randomBytes(32).toString('hex');
     const sig = signChallenge(nonce, pair1.privateKey);
 

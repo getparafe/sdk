@@ -26,7 +26,6 @@ const agent = await parafe.register({
   name: 'my-travel-agent',       // lowercase alphanumeric + hyphens, 3–100 chars
   type: 'enterprise',             // 'personal' or 'enterprise'
   owner: 'Acme Corp',
-  keyAlgorithm: 'P-256',          // Optional: 'Ed25519' (default) or 'P-256' (ES256, the key type AP2 uses)
   scopePolicies: {               // Optional: declare what scopes this agent accepts
     'flight-rebooking': {
       permissions: ['read_bookings', 'search_alternatives', 'request_rebooking'],
@@ -169,6 +168,10 @@ const escalated = await parafe.escalateScope({
 });
 ```
 
+## Breaking in 0.8.0
+
+- `register()` and `generateKeyPair()` create a **P-256** (ES256) key by default, the key type AP2 uses: an AP2 receipt counts as mandate-verified only when it is signed with the participant's registered P-256 key. Pass `keyAlgorithm: 'Ed25519'` for the old default; the broker accepts both. An agent keeps the key it registered with: to move an existing Ed25519 agent to P-256, register a new agent.
+
 ## Breaking in 0.7.0
 
 - `ParafeClient.authorization.verified()` takes the user-signed AP2 mandate (`{ mandate, checkoutJwt?, checkoutHash?, checkoutMandate? }`) instead of `{ instruction, platform, userSignature }`. The old form was deprecated and the broker refused it; passing `userSignature` now throws.
@@ -217,7 +220,7 @@ if (!r.valid) {
 
 The broker checks the chain against the issuers you trust (plus its own list; never the broker's own keys), every constraint, and the checkout binding, refuses a "human present" mandate signed by a registered agent's key, and records the redemption: the same mandate, or another one for the same checkout, presented again returns `alreadyRedeemed: true`. `r.agent` names the registered Parafé agent whose key signed the mandate (human not present), with `isCounterparty` in a session. To verify offline instead, use `verifyAp2Mandate` from `@getparafe/verify`.
 
-Once you've accepted or rejected the mandate, AP2 says you MUST return a Checkout Receipt (a payment processor: a Payment Receipt). Sign it as your agent (it needs a P-256 key) and file it in the session:
+Once you've accepted or rejected the mandate, AP2 says you MUST return a Checkout Receipt (a payment processor: a Payment Receipt). Sign it as your agent (it needs a P-256 key, the default since 0.8.0) and file it in the session:
 
 ```typescript
 const receipt = await parafe.recordAp2Receipt(sessionId, r.valid

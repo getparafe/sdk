@@ -1,6 +1,6 @@
 {
   "name": "@getparafe/sdk",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Official Node.js/TypeScript SDK for the Parafe Trust Broker",
   "author": "Parafe",
   "license": "MIT",

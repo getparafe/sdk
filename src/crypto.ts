@@ -2,7 +2,7 @@
  * Agent keys, challenge signing and proofs of possession for @getparafe/sdk.
  * Uses Node.js native crypto (and jose for the proof JWTs).
  *
- * Agents may use Ed25519 (default) or P-256 / ES256 (the key type AP2 uses).
+ * Agents may use P-256 / ES256 (default; the key type AP2 uses) or Ed25519.
  */
 
 import * as nodeCrypto from 'node:crypto';
@@ -18,13 +18,13 @@ export interface KeyPair {
 }
 
 /**
- * Generate a fresh agent key pair: Ed25519 (default) or P-256.
+ * Generate a fresh agent key pair: P-256 (default) or Ed25519.
  * Returns base64-encoded DER buffers (SPKI for public, PKCS8 for private).
  */
-export function generateKeyPair(algorithm: KeyAlgorithm = 'Ed25519'): KeyPair {
-  const { privateKey, publicKey } = algorithm === 'P-256'
-    ? nodeCrypto.generateKeyPairSync('ec', { namedCurve: 'P-256' })
-    : nodeCrypto.generateKeyPairSync('ed25519');
+export function generateKeyPair(algorithm: KeyAlgorithm = 'P-256'): KeyPair {
+  const { privateKey, publicKey } = algorithm === 'Ed25519'
+    ? nodeCrypto.generateKeyPairSync('ed25519')
+    : nodeCrypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
 
   return {
     publicKey: publicKey.export({ type: 'spki', format: 'der' }).toString('base64'),

@@ -414,7 +414,7 @@ export class ParafeClient {
   // ── Agent registration ───────────────────────────────────────────────────────
 
   /**
-   * Generate an Ed25519 key pair, register a new agent with the broker,
+   * Generate a key pair (P-256 by default), register a new agent with the broker,
    * and store the returned credentials in memory.
    *
    * **Important:** The returned `privateKey` is the only copy — the broker does not store it.
@@ -423,8 +423,8 @@ export class ParafeClient {
   async register(opts: RegisterOptions): Promise<RegisterResult> {
     const { name, type, owner, scopePolicies, keyAlgorithm } = opts;
 
-    // Generate key pair (Ed25519 by default; P-256 for AP2 interop)
-    const { publicKey, privateKey } = generateKeyPair(keyAlgorithm ?? 'Ed25519');
+    // P-256 by default: AP2 receipts need it. Ed25519 stays accepted.
+    const { publicKey, privateKey } = generateKeyPair(keyAlgorithm ?? 'P-256');
 
     // Build request body (broker uses snake_case)
     const body: Record<string, unknown> = {

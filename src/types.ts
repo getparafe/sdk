@@ -100,7 +100,7 @@ export interface RegisterOptions {
   type: 'personal' | 'enterprise';
   owner: string;
   scopePolicies?: ScopePolicies;
-  /** The agent's key type. Default 'Ed25519'; 'P-256' (ES256) is what AP2 uses. */
+  /** The agent's key type. Default 'P-256' (ES256, what AP2 uses); 'Ed25519' is also accepted. */
   keyAlgorithm?: 'Ed25519' | 'P-256';
 }
 
