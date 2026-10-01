@@ -16,6 +16,7 @@ import { request } from './http.js';
 import { ValidationError, AuthError, NotFoundError, ParafeError, ConflictError } from './errors.js';
 import * as jose from 'jose';
 import type {
+  Parties,
   ParafeClientOptions,
   Authorization,
   ScopePolicies,
@@ -164,6 +165,7 @@ function participantView(raw: Record<string, unknown> = {}): import('./types.js'
     agentName: raw.agent_name as string,
     identityAssurance: raw.identity_assurance as string,
     verificationTier: raw.verification_tier as string | undefined,
+    ...(raw.parties ? { parties: raw.parties as Parties } : {}),
   };
 }
 
@@ -314,7 +316,7 @@ function mandateResult(raw: Record<string, unknown>): VerifyMandateResult {
           agentName: agent.agent_name as string,
           identityAssurance: agent.identity_assurance as string,
           verificationTier: agent.verification_tier as string,
-          ...(agent.org_domain ? { orgDomain: agent.org_domain as string } : {}),
+          ...(agent.operator_domain ? { operatorDomain: agent.operator_domain as string } : {}),
           ...(typeof agent.is_counterparty === 'boolean' ? { isCounterparty: agent.is_counterparty } : {}),
         }
       : null,
@@ -421,7 +423,7 @@ export class ParafeClient {
    * Call `saveCredentials()` immediately after registration to persist it securely.
    */
   async register(opts: RegisterOptions): Promise<RegisterResult> {
-    const { name, type, owner, scopePolicies, keyAlgorithm } = opts;
+    const { name, type, principalName, actsFor, scopePolicies, keyAlgorithm } = opts;
 
     // P-256 by default: AP2 receipts need it. Ed25519 stays accepted.
     const { publicKey, privateKey } = generateKeyPair(keyAlgorithm ?? 'P-256');
@@ -430,9 +432,10 @@ export class ParafeClient {
     const body: Record<string, unknown> = {
       agent_name: name,
       agent_type: type,
-      owner,
+      principal_name: principalName,
       public_key: publicKey,
     };
+    if (actsFor) body.acts_for = { ref: actsFor.ref };
     if (scopePolicies) {
       body.scope_policies = scopePolicies;
     }
@@ -443,7 +446,12 @@ export class ParafeClient {
       did?: string;
       agent_name: string;
       agent_type: string;
-      owner: string;
+      principal_name: string;
+      principal_type?: 'personal' | 'org' | 'external' | null;
+      principal_id?: string | null;
+      principal_ref?: string | null;
+      operator_type?: 'personal' | 'org' | null;
+      operator_id?: string | null;
       identity_assurance: string;
       verification_tier: string;
       credential: string;
@@ -478,6 +486,11 @@ export class ParafeClient {
       privateKey,
       verificationTier: raw.verification_tier,
       identityAssurance: raw.identity_assurance,
+      operatorType: raw.operator_type ?? null,
+      operatorId: raw.operator_id ?? null,
+      principalType: raw.principal_type ?? null,
+      principalId: raw.principal_id ?? null,
+      principalRef: raw.principal_ref ?? null,
       issuedAt: raw.issued_at,
       expiresAt: raw.expires_at,
       ...(raw.claim ? { claimLink: toClaimLink(raw.claim) } : {}),
@@ -487,11 +500,11 @@ export class ParafeClient {
   // ── Claim links (Phase 1.5) ──────────────────────────────────────────────────
 
   /**
-   * A new claim link for the loaded agent, which must have no owner (it
+   * A new claim link for the loaded agent, which no person or org has claimed yet (it
    * registered without an API key). Show it to the person the agent acts for:
    * signed in to the Parafé portal, they approve it and the agent becomes theirs.
    * Single use, 30 minutes; replaces the previous link. Authenticates as the
-   * agent (credential + proof of possession). 409 `already_claimed` if it has an owner.
+   * agent (credential + proof of possession). 409 `already_claimed` once it has been claimed.
    */
   async createClaimLink(): Promise<ClaimLink> {
     const creds = this.requireCredentials();
@@ -508,7 +521,7 @@ export class ParafeClient {
   /**
    * Whether the loaded agent has been claimed, and whether its credential shows
    * it yet. When `credentialCurrent` is false, call `renewCredential(agentId)`
-   * (reason `identity_changed`, or `tier_changed` after the owner verifies their
+   * (reason `identity_changed`, or `tier_changed` after the principal verifies their
    * email). Handshakes use a claim as soon as it is approved.
    */
   async getClaimStatus(): Promise<ClaimStatus> {
@@ -516,13 +529,17 @@ export class ParafeClient {
     const url = `${this.brokerUrl}/agents/${creds.agentId}/claim-status`;
     const raw = await request<{
       claimed: boolean;
+      operator_type?: 'personal' | 'org' | null;
+      operator_id?: string | null;
+      principal_type?: 'personal' | 'org' | 'external' | null;
+      principal_ref?: string | null;
       identity_assurance: string;
       verification_tier: string;
-      owner_tier: string | null;
+      principal_tier: string | null;
       credential_current: boolean;
       registered_at: string;
-      owner_email?: string;
-      owner_email_verified?: boolean;
+      principal_email?: string;
+      principal_email_verified?: boolean;
     }>(url, {
       timeout: this.timeout,
       retries: this.retries,
@@ -531,12 +548,16 @@ export class ParafeClient {
     });
     return {
       claimed: raw.claimed,
+      operatorType: raw.operator_type ?? null,
+      operatorId: raw.operator_id ?? null,
+      principalType: raw.principal_type ?? null,
+      principalRef: raw.principal_ref ?? null,
       identityAssurance: raw.identity_assurance,
       verificationTier: raw.verification_tier,
-      ownerTier: raw.owner_tier ?? null,
+      principalTier: raw.principal_tier ?? null,
       credentialCurrent: raw.credential_current,
       registeredAt: raw.registered_at,
-      ...(raw.owner_email !== undefined ? { ownerEmail: raw.owner_email, ownerEmailVerified: Boolean(raw.owner_email_verified) } : {}),
+      ...(raw.principal_email !== undefined ? { principalEmail: raw.principal_email, principalEmailVerified: Boolean(raw.principal_email_verified) } : {}),
     };
   }
 
@@ -681,10 +702,13 @@ export class ParafeClient {
       mandateRefs: mandateRefs((ct.authorization as { mandate_refs?: unknown } | undefined)?.mandate_refs),
     };
 
+    const session = raw.session as { session_id: string; initiator?: { parties?: Parties }; target?: { parties?: Parties } };
     return {
       handshakeId: raw.handshake_id,
-      sessionId: raw.session.session_id,
+      sessionId: session.session_id,
       consentToken,
+      ...(session.initiator?.parties ? { initiatorParties: session.initiator.parties } : {}),
+      ...(session.target?.parties ? { targetParties: session.target.parties } : {}),
     };
   }
 
@@ -856,6 +880,8 @@ export class ParafeClient {
       keyThumbprint: cnf?.jkt ?? null,
       initiatorProof: (payload.initiator_proof as 'pop' | 'credential') ?? null,
       tokenId: payload.jti,
+      ...(payload.initiator_parties ? { initiatorParties: payload.initiator_parties as Parties } : {}),
+      ...(payload.target_parties ? { targetParties: payload.target_parties as Parties } : {}),
     };
   }
 
@@ -1292,13 +1318,13 @@ export class ParafeClient {
   }
 
   /**
-   * Renew an agent's credential. The broker re-issues it when the owner's
+   * Renew an agent's credential. The broker re-issues it when the principal's
    * verification tier changed, when the credential no longer shows the agent's
-   * owner or assurance (`identity_changed`, e.g. after a claim), or when it is
+   * principal, operator or assurance (`identity_changed`, e.g. after a claim), or when it is
    * expired or within 7 days of expiry;
    * otherwise `renewed: false`. Authenticates with the API key; without one, the
    * loaded agent renews itself (credential + proof of possession), which is how
-   * agents with no owner renew.
+   * agents with no operator renew.
    */
   async renewCredential(agentId: string): Promise<RenewCredentialResult> {
     const url = `${this.brokerUrl}/agents/${agentId}/renew`;

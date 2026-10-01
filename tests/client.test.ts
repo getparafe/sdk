@@ -171,7 +171,7 @@ describe('Full integration flow', () => {
     const result = await initiatorClient.register({
       name: uniqueName('sdk-initiator'),
       type: 'enterprise',
-      owner: 'SDK Test Suite',
+      principalName: 'SDK Test Suite',
     });
 
     expect(result.agentId).toMatch(/^prf_agent_/);
@@ -199,7 +199,7 @@ describe('Full integration flow', () => {
     const result = await targetClient.register({
       name: uniqueName('sdk-target'),
       type: 'enterprise',
-      owner: 'SDK Test Suite',
+      principalName: 'SDK Test Suite',
       scopePolicies: {
         'sdk-test-scope': {
           permissions: ['read_data', 'write_data'],
@@ -408,12 +408,12 @@ describe('Full integration flow', () => {
     await iniClient.register({
       name: uniqueName('sdk-esc-ini'),
       type: 'enterprise',
-      owner: 'SDK Test Suite',
+      principalName: 'SDK Test Suite',
     });
     const tgtReg = await tgtClient.register({
       name: uniqueName('sdk-esc-tgt'),
       type: 'enterprise',
-      owner: 'SDK Test Suite',
+      principalName: 'SDK Test Suite',
       scopePolicies: {
         'base-scope': { permissions: ['read'] },
         'escalated-scope': { permissions: ['read', 'write'] },
@@ -450,10 +450,10 @@ describe('Full integration flow', () => {
   test('an Ed25519 agent (no longer the default, still accepted) runs the whole flow', async () => {
     const ini = makeClient();
     const tgt = makeClient();
-    const iniReg = await ini.register({ name: uniqueName('sdk-ed25519-ini'), type: 'enterprise', owner: 'SDK Test Suite', keyAlgorithm: 'Ed25519' });
+    const iniReg = await ini.register({ name: uniqueName('sdk-ed25519-ini'), type: 'enterprise', principalName: 'SDK Test Suite', keyAlgorithm: 'Ed25519' });
     expect(iniReg.credentialSdJwt).toBeTruthy();
     expect(Buffer.from(iniReg.publicKey, 'base64').length).toBe(44); // Ed25519 SPKI
-    const tgtReg = await tgt.register({ name: uniqueName('sdk-ed25519-tgt'), type: 'enterprise', owner: 'SDK Test Suite', keyAlgorithm: 'Ed25519', scopePolicies: { s: { permissions: ['read'], minimum_initiator_proof: 'pop' } } });
+    const tgtReg = await tgt.register({ name: uniqueName('sdk-ed25519-tgt'), type: 'enterprise', principalName: 'SDK Test Suite', keyAlgorithm: 'Ed25519', scopePolicies: { s: { permissions: ['read'], minimum_initiator_proof: 'pop' } } });
     const hs = await ini.handshake({ targetAgentId: tgtReg.agentId, scope: 's', permissions: ['read'] });
     const done = await tgt.completeHandshake({ handshakeId: hs.handshakeId, challengeNonce: hs.challengeForTarget });
     expect(done.consentToken.initiatorProof).toBe('pop');
@@ -497,7 +497,7 @@ describe('Self-registered agents and claim links (Phase 1.5)', () => {
   let firstCode = '';
 
   test('keyless register() returns claimLink', async () => {
-    const result = await keyless.register({ name: uniqueName('sdk-claim'), type: 'assistant', owner: 'SDK Test Person' });
+    const result = await keyless.register({ name: uniqueName('sdk-claim'), type: 'assistant', principalName: 'SDK Test Person' });
     expect(result.identityAssurance).toBe('self_registered');
     expect(result.claimLink?.code).toMatch(/^[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{2}$/);
     expect(result.claimLink?.url).toContain('/claim?code=');
@@ -509,7 +509,7 @@ describe('Self-registered agents and claim links (Phase 1.5)', () => {
     expect(link.code).not.toBe(firstCode);
     const status = await keyless.getClaimStatus();
     expect(status).toEqual({
-      claimed: false, identityAssurance: 'self_registered', verificationTier: 'unverified', ownerTier: null, credentialCurrent: true,
+      claimed: false, identityAssurance: 'self_registered', verificationTier: 'unverified', principalTier: null, operatorType: null, operatorId: null, principalType: null, principalRef: null, credentialCurrent: true,
       registeredAt: expect.any(String),
     });
   });
@@ -517,7 +517,7 @@ describe('Self-registered agents and claim links (Phase 1.5)', () => {
   test('a handshake refused for tier carries the claim link', async () => {
     const target = makeClient();
     const t = await target.register({
-      name: uniqueName('sdk-claim-target'), type: 'enterprise', owner: 'SDK Test Suite',
+      name: uniqueName('sdk-claim-target'), type: 'enterprise', principalName: 'SDK Test Suite',
       scopePolicies: { 'place-order': { permissions: ['create_order'], minimum_verification_tier: 'email_verified' } },
     });
     const err = await keyless.handshake({ targetAgentId: t.agentId, scope: 'place-order', permissions: ['create_order'] }).catch((e) => e);
@@ -535,7 +535,7 @@ describe('Error handling', () => {
       client.register({
         name: 'INVALID NAME WITH SPACES',
         type: 'enterprise',
-        owner: 'Test',
+        principalName: 'Test',
       })
     ).rejects.toThrow(ValidationError);
   });
@@ -545,7 +545,7 @@ describe('Error handling', () => {
     await client.register({
       name: uniqueName('sdk-err-test'),
       type: 'enterprise',
-      owner: 'Test',
+      principalName: 'Test',
     });
 
     const { NotFoundError } = await import('../src/errors.js');
@@ -568,5 +568,21 @@ describe('Error handling', () => {
         sessionId: 'sess_fake',
       })
     ).rejects.toThrow(AuthError);
+  });
+});
+
+describe('operator and principal (broker SPEC-002)', () => {
+  test('register() with actsFor: the key holder registers an agent acting for one of its users', async () => {
+    const platform = makeClient();
+    const ref = `sdk-user-${RUN_ID}`;
+    const r = await platform.register({ name: uniqueName('sdk-acts-for'), type: 'personal', principalName: 'Platform user', actsFor: { ref } });
+    expect(r).toMatchObject({ principalType: 'external', principalId: null, principalRef: ref, operatorType: 'personal', verificationTier: 'unverified', identityAssurance: 'registered' });
+    const status = await platform.getClaimStatus();
+    expect(status).toMatchObject({ claimed: false, principalType: 'external', principalRef: ref, operatorType: 'personal', principalTier: null });
+  });
+
+  test('register() with an email as actsFor.ref is refused (refs are opaque)', async () => {
+    await expect(makeClient().register({ name: uniqueName('sdk-acts-for-email'), type: 'personal', principalName: 'X', actsFor: { ref: 'alex@example.com' } }))
+      .rejects.toThrow(ValidationError);
   });
 });

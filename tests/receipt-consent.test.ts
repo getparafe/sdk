@@ -217,3 +217,31 @@ describe('receipts v2 (B3, B4, B5)', () => {
     expect(decodeReceipt(jws).receiptId).toBe('rcpt_1');
   });
 });
+
+describe('operator and principal (broker SPEC-002)', () => {
+  const client = new ParafeClient({ brokerUrl: 'https://broker.test', retries: 0 });
+  const userParties = { operator: { type: 'org' as const, id: 'prf_org_p' }, principal: { type: 'external' as const, ref: 'user-8f3a' } };
+  const shopParties = { operator: { type: 'org' as const, id: 'prf_org_s' }, principal: { type: 'org' as const, id: 'prf_org_s' } };
+
+  it('verifyConsentLocally() returns the parties the token names', async () => {
+    const token = await consentToken({ permissions: ['create_order'], initiator_parties: userParties, target_parties: shopParties });
+    const r = await client.verifyConsentLocally(token, JWKS);
+    expect(r.initiatorParties).toEqual(userParties);
+    expect(r.targetParties).toEqual(shopParties);
+  });
+
+  it('decodeReceipt() returns each participant\'s parties', async () => {
+    const jws = await new jose.SignJWT({
+      ver: 2, receipt_id: 'rcpt_1', session_id: 'sess_1', handshake_id: 'hs_1',
+      participants: {
+        initiator: { agent_id: 'prf_agent_u', agent_name: 'u', identity_assurance: 'registered', parties: userParties },
+        target: { agent_id: 'prf_agent_s', agent_name: 's', identity_assurance: 'registered', parties: shopParties },
+      },
+      handshake: { mutual_auth_completed: true, completed_at: 'now', context_hash: null }, consent_tokens: [], actions: [], chain_head: null,
+      session: { started_at: 'a', closed_at: 'b', closed_by: null, status: 'closed' },
+    }).setProtectedHeader({ alg: 'ES256', kid: 'es-1' }).setIssuedAt().setIssuer('did:web:broker.test').sign(ec.privateKey);
+    const r = decodeReceipt(jws);
+    expect(r.participants.initiator.parties).toEqual(userParties);
+    expect(r.participants.target.parties).toEqual(shopParties);
+  });
+});

@@ -34,7 +34,7 @@ export class AuthError extends ParafeError {
 export class ForbiddenError extends ParafeError {
   /**
    * Phase 1.5: on a handshake refused for identity or tier (identity_insufficient,
-   * tier_insufficient) when the agent has no owner, a claim link to show the
+   * tier_insufficient) when no person has claimed the agent yet, a claim link to show the
    * person it acts for, and a hint saying so.
    */
   public readonly claim?: { url: string; code: string; expiresAt: string };

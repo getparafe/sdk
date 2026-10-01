@@ -95,10 +95,30 @@ export type ScopePolicies = Record<string, ScopePolicy>;
 
 // ── register() ──
 
+/**
+ * Broker SPEC-002: who runs an agent (operator) and who it acts for
+ * (principal). A person's user ID is never shown: a personal operator or
+ * principal has `type` only; an org has `id`; an external principal (one of a
+ * platform's users) has the platform's opaque `ref`.
+ */
+export interface Parties {
+  operator: { type: 'personal' | 'org'; id?: string } | null;
+  principal: { type: 'personal' | 'org' | 'external'; id?: string; ref?: string } | null;
+}
+
 export interface RegisterOptions {
   name: string;
   type: 'personal' | 'enterprise';
-  owner: string;
+  /** Who the agent acts for (its principal), as free text. With an API key, the account's own name is used instead. */
+  principalName: string;
+  /**
+   * Register an agent acting for one of your users (needs an API key; you become its operator).
+   * `ref` is your opaque reference for the user: 1-128 letters, digits, . _ : - (no `@`: the broker
+   * refuses emails, because counterparties see the ref in consent tokens and receipts). The agent
+   * starts unverified; the person can claim it (createClaimLink) to give it their tier.
+   * Agent names are unique per (you, ref).
+   */
+  actsFor?: { ref: string };
   scopePolicies?: ScopePolicies;
   /** The agent's key type. Default 'P-256' (ES256, what AP2 uses); 'Ed25519' is also accepted. */
   keyAlgorithm?: 'Ed25519' | 'P-256';
@@ -115,10 +135,18 @@ export interface RegisterResult {
   privateKey: string;
   verificationTier: string;
   identityAssurance: string;
+  /** Who runs the agent: the account that registered it; null when keyless. */
+  operatorType: 'personal' | 'org' | null;
+  operatorId: string | null;
+  /** Who it acts for: 'external' for one of your users (actsFor); null when keyless. */
+  principalType: 'personal' | 'org' | 'external' | null;
+  principalId: string | null;
+  /** Your reference for the user (actsFor). */
+  principalRef: string | null;
   issuedAt: string;
   expiresAt: string;
   /**
-   * Keyless registrations only (no API key: the agent has no owner). Show the
+   * Keyless registrations only (no API key: the agent has no operator or principal). Show the
    * link to the person the agent acts for; once they approve it in the portal,
    * the agent is theirs (identity assurance 'claimed', their verification tier).
    */
@@ -137,22 +165,28 @@ export interface ClaimLink {
 }
 
 export interface ClaimStatus {
-  /** True once someone has approved a claim link (the agent has an owner). */
+  /** True once a person or org has approved a claim link (the agent has a principal who is a Parafé account). */
   claimed: boolean;
-  /** 'self_registered' before a claim, 'claimed' after. */
+  /** Who runs the agent (null for a self-registered or claimed one). */
+  operatorType: 'personal' | 'org' | null;
+  operatorId: string | null;
+  /** Who it acts for: 'external' for a platform's user not yet claimed (or disconnected). */
+  principalType: 'personal' | 'org' | 'external' | null;
+  principalRef: string | null;
+  /** 'self_registered' before a claim, 'claimed' after ('registered' for an operator's agent). */
   identityAssurance: string;
   /** The agent's verification tier (handshakes use this at once). */
   verificationTier: string;
-  /** The owner's current tier, or null with no owner. If higher, renew. */
-  ownerTier: string | null;
-  /** False when the credential doesn't show the agent's current owner, assurance or tier yet: call renewCredential(). */
+  /** The principal's current tier, or null with no verified principal. If higher, renew. */
+  principalTier: string | null;
+  /** False when the credential doesn't show the agent's current principal, operator, assurance or tier yet: call renewCredential(). */
   credentialCurrent: boolean;
   /** When the agent registered (ISO 8601). */
   registeredAt: string;
-  /** The owner's email, only if they chose to share it with your platform (at the claim, or later in the portal). Never in the credential. */
-  ownerEmail?: string;
-  /** Whether that email is verified (present with ownerEmail). */
-  ownerEmailVerified?: boolean;
+  /** The principal's email, only if they chose to share it with the operator (at the claim, or later in the portal). Never in the credential. */
+  principalEmail?: string;
+  /** Whether that email is verified (present with principalEmail). */
+  principalEmailVerified?: boolean;
 }
 
 // ── Credential status ──
@@ -225,6 +259,9 @@ export interface CompleteHandshakeResult {
   handshakeId: string;
   sessionId: string;
   consentToken: ConsentTokenDetail;
+  /** Who runs each agent and who it acts for (broker SPEC-002). */
+  initiatorParties?: Parties;
+  targetParties?: Parties;
 }
 
 // ── escalateScope() ──
@@ -416,6 +453,8 @@ export interface ReceiptParticipant {
   agentName: string;
   identityAssurance: string;
   verificationTier?: string;
+  /** Who runs the agent and who it acts for (broker SPEC-002). */
+  parties?: Parties;
 }
 
 export interface ReceiptConsentToken {
@@ -504,6 +543,9 @@ export interface VerifyConsentLocalResult {
   /** How the initiator proved itself when the token was issued. */
   initiatorProof: 'pop' | 'credential' | null;
   tokenId?: string;
+  /** Who runs each agent and who it acts for (broker SPEC-002). */
+  initiatorParties?: Parties;
+  targetParties?: Parties;
 }
 
 // ── getPublicKey() / getJwks() ──
@@ -639,7 +681,7 @@ export interface VerifyMandateOptions {
   mandate: string;
   /** Record the mandate in this session (the loaded agent must be a participant). */
   sessionId?: string;
-  /** The verifying agent, when authenticating with the owner's API key instead of a loaded credential. */
+  /** The verifying agent, when authenticating with its operator's API key instead of a loaded credential. */
   agentId?: string;
   /** The merchant-signed Checkout JWT, when the checkout mandate doesn't disclose it; for a payment mandate, the checkout it pays. */
   checkoutJwt?: string;
@@ -663,7 +705,8 @@ export interface MandateAgentMatch {
   agentName: string;
   identityAssurance: string;
   verificationTier: string;
-  orgDomain?: string;
+  /** The verified domain of the org that runs the agent (broker SPEC-002; was orgDomain). */
+  operatorDomain?: string;
   /** In a session: whether the agent holding the mandate's key is your counterparty. */
   isCounterparty?: boolean;
 }
