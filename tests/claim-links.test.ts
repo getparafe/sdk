@@ -87,11 +87,13 @@ describe('claim links (Phase 1.5)', () => {
   it('getClaimStatus() maps the status and signs a GET proof', async () => {
     respond = () => ({ status: 200, body: {
       claimed: true, identity_assurance: 'claimed', verification_tier: 'unverified', owner_tier: 'email_verified', credential_current: false,
+      registered_at: '2026-09-30T12:00:00.000Z',
     } });
     const client = await clientWithCredentials();
     const status = await client.getClaimStatus();
     expect(status).toEqual({
       claimed: true, identityAssurance: 'claimed', verificationTier: 'unverified', ownerTier: 'email_verified', credentialCurrent: false,
+      registeredAt: '2026-09-30T12:00:00.000Z',
     });
     expect(calls[0].url).toBe('https://broker.test/agents/prf_agent_alex01/claim-status');
     expect(calls[0].method).toBe('GET');

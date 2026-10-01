@@ -147,6 +147,8 @@ export interface ClaimStatus {
   ownerTier: string | null;
   /** False when the credential doesn't show the agent's current owner, assurance or tier yet: call renewCredential(). */
   credentialCurrent: boolean;
+  /** When the agent registered (ISO 8601). */
+  registeredAt: string;
 }
 
 // ── Credential status ──

@@ -510,6 +510,7 @@ describe('Self-registered agents and claim links (Phase 1.5)', () => {
     const status = await keyless.getClaimStatus();
     expect(status).toEqual({
       claimed: false, identityAssurance: 'self_registered', verificationTier: 'unverified', ownerTier: null, credentialCurrent: true,
+      registeredAt: expect.any(String),
     });
   });
 

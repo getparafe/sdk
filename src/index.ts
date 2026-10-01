@@ -520,6 +520,7 @@ export class ParafeClient {
       verification_tier: string;
       owner_tier: string | null;
       credential_current: boolean;
+      registered_at: string;
     }>(url, {
       timeout: this.timeout,
       retries: this.retries,
@@ -532,6 +533,7 @@ export class ParafeClient {
       verificationTier: raw.verification_tier,
       ownerTier: raw.owner_tier ?? null,
       credentialCurrent: raw.credential_current,
+      registeredAt: raw.registered_at,
     };
   }
 
