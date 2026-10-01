@@ -168,12 +168,15 @@ const escalated = await parafe.escalateScope({
 });
 ```
 
+## Breaking in 0.11.0
+
+- `pairingCode` is gone from claim links (`register().claimLink`, `createClaimLink()`, `ForbiddenError.claim`). The link's own `code` does the same job: tell the person the code with the link ("The page will show the code 7KQ2-M9XD-4H"); the claim page shows it first. Needs the broker from 2026-10-01 (later the same day as 0.10.0).
+
 ## New in 0.10.0
 
 Needs a broker with agent naming and the claim page (Parafé SPEC-002 decision 10; api.parafe.ai since 2026-10-01). Nothing breaks.
 
 - Without an API key, `register()` needs no `name` or `principalName`: `register({ type: 'personal' })`. A self-registered agent's public name is its agent ID (registry, credentials, receipts). If you send a name or principal, the person sees them only on the claim page ("Calls itself", "Says it acts for"); they're never in the credential. With an API key, `name` is still required and unique per operator.
-- Claim links (`register().claimLink`, `createClaimLink()`, `ForbiddenError.claim`) carry `pairingCode` (e.g. `K7-Q2`). Show it with the link: the claim page shows the same code, so the person can check the link is yours.
 - 0.10.1: `renewCredential()` also updates the stored agent name from the new credential (a self-registered agent's name becomes its agent ID).
 - Credentials of self-registered agents no longer carry `principal_name` or the self-chosen name. Credentials issued before still do: `getClaimStatus()` reports `credentialCurrent: false` and `renewCredential()` gives one without them (reason `identity_changed`).
 
@@ -310,10 +313,10 @@ const parafe = new ParafeClient({ brokerUrl: 'https://api.parafe.ai' }); // no a
 const agent = await parafe.register({ type: 'personal' });
 await parafe.saveCredentials('./alex-assistant.enc', process.env.PASSPHRASE!);
 console.log(agent.claimLink);
-// { url: 'https://platform.parafe.ai/claim?code=7KQ2-M9XD-4H', code: '7KQ2-M9XD-4H', pairingCode: 'K7-Q2', expiresAt: '…' }
+// { url: 'https://platform.parafe.ai/claim?code=7KQ2-M9XD-4H', code: '7KQ2-M9XD-4H', expiresAt: '…' }
 
-// 2. Show the link AND the pairing code to the person ("The page will show the code K7-Q2").
-//    The claim page shows the same code, so they can check the link is yours.
+// 2. Show the person the link and tell them its code ("The page will show the code 7KQ2-M9XD-4H").
+//    The claim page shows the code first, so they can check the link is yours.
 //    It is single use and lasts 30 minutes; ask for a new one any time (it replaces the old one):
 const link = await parafe.createClaimLink();
 
@@ -322,8 +325,8 @@ try {
   await parafe.handshake({ targetAgentId: 'prf_agent_shop', scope: 'place-order', permissions: ['create_order'] });
 } catch (err) {
   if (err instanceof ForbiddenError && err.claim) {
-    // err.hint: "Ask the person you act for to open this link to verify you, and show them the pairing code."
-    showToUser(err.claim.url, err.claim.pairingCode);
+    // err.hint: "Ask the person you act for to open this link to verify you, and tell them its code."
+    showToUser(err.claim.url, err.claim.code);
   }
 }
 
@@ -342,10 +345,10 @@ if (!status.credentialCurrent || status.principalTier !== status.verificationTie
 - The agent gets the person's verification tier. If their email isn't verified yet, the tier rises once they verify it: check `getClaimStatus()` (`principalTier` above `verificationTier`) and renew.
 - `createClaimLink()`, `getClaimStatus()` and self-renewal authenticate as the agent (credential plus proof of possession). `createClaimLink()` answers 409 `already_claimed` once a person or org has claimed the agent.
 - The person can revoke the agent from the portal like any of their agents.
-- **What the person sees.** The claim page shows the pairing code first, then "Platform: Unknown (self-registered)" (Parafé only names a platform it authenticated), and whatever the agent sent at registration as "Calls itself" (`name`) and "Says it acts for" (`principalName`), unverified. The person can give the agent a private name of their own; only they see it.
+- **What the person sees.** The claim page shows the link's code first, then "Platform: Unknown (self-registered)" (Parafé only names a platform it authenticated), and whatever the agent sent at registration as "Calls itself" (`name`) and "Says it acts for" (`principalName`), unverified. The person can give the agent a private name of their own; only they see it.
 - **For an organization.** An owner or admin of an org can claim the agent for the org instead of for themselves. It then gets the org's verification tier and stays with the org if that person leaves it.
 - **Principal email (opt-in).** The claim page has a box "Share my email with the platform that runs this agent", off by default; the person can also turn it on or off later on the agent's page. Only while it's on, `getClaimStatus()` returns `principalEmail` and `principalEmailVerified`. It is never in the credential or the SD-JWT VC, which every counterparty sees.
-- **Key fingerprint.** The claim page shows the agent's key fingerprint so the person can check it's the agent they expect. It is the RFC 7638 JWK thumbprint of the agent's public key: the 43-character base64url SHA-256 of the canonical JWK, shown in full, not grouped. It's the same value as a consent token's `cnf.jkt`. Show the identical string on your platform with `publicKeyThumbprint(agent.publicKey)`. Don't use the credential's `pub_key_thumbprint` claim: it's a different hash (hex SHA-256 of the base64 SPKI) and won't match.
+- **Key fingerprint.** The claim page shows the agent's key fingerprint under "Details" (the link's code comes first). It is the RFC 7638 JWK thumbprint of the agent's public key: the 43-character base64url SHA-256 of the canonical JWK, shown in full, not grouped. It's the same value as a consent token's `cnf.jkt`. Show the identical string on your platform with `publicKeyThumbprint(agent.publicKey)`. Don't use the credential's `pub_key_thumbprint` claim: it's a different hash (hex SHA-256 of the base64 SPKI) and won't match.
 - **Public record.** `GET https://api.parafe.ai/registry/agents/<agent_id>` (no auth) returns `registered_at`, `status`, `verification_tier`, `identity_assurance`, `operator_type` (and `operator_name` for an org) and `principal_type` for an active agent (never a person's name or ID) (listed or unlisted). A revoked or suspended agent returns a minimal record: `agent_id`, `did`, `status`, `registered_at` and `revoked_at` (null for agents revoked before the broker recorded the date). `parafe.ai/registry/<agent_id>` shows the same.
 
 ## Reputation Metrics

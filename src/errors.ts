@@ -37,7 +37,7 @@ export class ForbiddenError extends ParafeError {
    * tier_insufficient) when no person has claimed the agent yet, a claim link to show the
    * person it acts for, and a hint saying so.
    */
-  public readonly claim?: { url: string; code: string; pairingCode: string; expiresAt: string };
+  public readonly claim?: { url: string; code: string; expiresAt: string };
   public readonly hint?: string;
   /**
    * B18: on a handshake refused by a reputation floor (tenure_insufficient,
@@ -50,7 +50,7 @@ export class ForbiddenError extends ParafeError {
   constructor(
     message: string,
     code = 'forbidden',
-    extra: { claim?: { url: string; code: string; pairingCode: string; expiresAt: string }; hint?: string; reputation?: { signal: string; required: number; actual: number } } = {}
+    extra: { claim?: { url: string; code: string; expiresAt: string }; hint?: string; reputation?: { signal: string; required: number; actual: number } } = {}
   ) {
     super(message, code, 403);
     this.name = 'ForbiddenError';
@@ -119,10 +119,10 @@ export function mapBrokerError(statusCode: number, body: Record<string, unknown>
     case 401:
       return new AuthError(message, code);
     case 403: {
-      const claim = body.claim as { claim_url?: string; code?: string; pairing_code?: string; expires_at?: string } | undefined;
+      const claim = body.claim as { claim_url?: string; code?: string; expires_at?: string } | undefined;
       return new ForbiddenError(message, code, {
         claim: claim && typeof claim.claim_url === 'string' && typeof claim.code === 'string'
-          ? { url: claim.claim_url, code: claim.code, pairingCode: String(claim.pairing_code ?? ''), expiresAt: String(claim.expires_at) }
+          ? { url: claim.claim_url, code: claim.code, expiresAt: String(claim.expires_at) }
           : undefined,
         hint: typeof body.hint === 'string' ? body.hint : undefined,
         reputation: typeof body.signal === 'string' && typeof body.required === 'number' && typeof body.actual === 'number'

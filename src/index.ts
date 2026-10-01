@@ -154,8 +154,8 @@ function mandateRefs(raw: unknown): MandateRef[] {
 
 const RECEIPT_TYP = 'parafe-session-receipt+jwt';
 
-function toClaimLink(raw: { claim_url: string; code: string; pairing_code: string; expires_at: string }): ClaimLink {
-  return { url: raw.claim_url, code: raw.code, pairingCode: raw.pairing_code, expiresAt: raw.expires_at };
+function toClaimLink(raw: { claim_url: string; code: string; expires_at: string }): ClaimLink {
+  return { url: raw.claim_url, code: raw.code, expiresAt: raw.expires_at };
 }
 
 function participantView(raw: Record<string, unknown> = {}): import('./types.js').ReceiptParticipant {
@@ -459,7 +459,7 @@ export class ParafeClient {
       credential_sd_jwt?: string;
       issued_at: string;
       expires_at: string;
-      claim?: { claim_url: string; code: string; pairing_code: string; expires_at: string };
+      claim?: { claim_url: string; code: string; expires_at: string };
     }>(`${this.brokerUrl}/agents/register`, {
       ...this.httpOpts,
       method: 'POST',
@@ -510,7 +510,7 @@ export class ParafeClient {
   async createClaimLink(): Promise<ClaimLink> {
     const creds = this.requireCredentials();
     const url = `${this.brokerUrl}/agents/${creds.agentId}/claim-link`;
-    const raw = await request<{ claim_url: string; code: string; pairing_code: string; expires_at: string }>(url, {
+    const raw = await request<{ claim_url: string; code: string; expires_at: string }>(url, {
       timeout: this.timeout,
       retries: this.retries,
       headers: { Authorization: `Bearer ${creds.credential}`, ...(await this.proofHeader('POST', url, { agent_id: creds.agentId })) },

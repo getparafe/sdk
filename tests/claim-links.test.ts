@@ -25,8 +25,8 @@ const CREDS: StoredCredentials = {
   issuedAt: '2026-09-28T00:00:00.000Z',
   expiresAt: '2099-01-01T00:00:00.000Z',
 };
-const CLAIM = { claim_url: 'https://platform.parafe.ai/claim?code=7KQ2-M9XD-4H', code: '7KQ2-M9XD-4H', pairing_code: 'K7-Q2', expires_at: '2026-09-30T12:30:00.000Z' };
-const LINK = { url: CLAIM.claim_url, code: CLAIM.code, pairingCode: CLAIM.pairing_code, expiresAt: CLAIM.expires_at };
+const CLAIM = { claim_url: 'https://platform.parafe.ai/claim?code=7KQ2-M9XD-4H', code: '7KQ2-M9XD-4H', expires_at: '2026-09-30T12:30:00.000Z' };
+const LINK = { url: CLAIM.claim_url, code: CLAIM.code, expiresAt: CLAIM.expires_at };
 
 let calls: { url: string; method: string; headers: Record<string, string>; body?: Record<string, unknown> }[] = [];
 let respond: (url: string) => { status: number; body: unknown } = () => ({ status: 200, body: {} });
@@ -82,7 +82,9 @@ describe('claim links (Phase 1.5)', () => {
     const result = await client.register({ type: 'personal' });
     expect(calls[0].body).not.toHaveProperty('agent_name');
     expect(calls[0].body).not.toHaveProperty('principal_name');
-    expect(result.claimLink?.pairingCode).toBe('K7-Q2');
+    // The link's code is the one to show the person (no second code).
+    expect(result.claimLink).toEqual(LINK);
+    expect(result.claimLink).not.toHaveProperty('pairingCode');
     expect(client.credentialStatus()).toMatchObject({ loaded: true, agentName: 'prf_agent_new' });
   });
 

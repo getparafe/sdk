@@ -169,13 +169,8 @@ export interface RegisterResult {
 export interface ClaimLink {
   /** Portal URL to open, e.g. https://platform.parafe.ai/claim?code=7KQ2-M9XD-4H */
   url: string;
-  /** The code, shown XXXX-XXXX-XX */
+  /** The code, shown XXXX-XXXX-XX. Tell the person this code with the link: the claim page shows it first (broker SPEC-002 decision 10). */
   code: string;
-  /**
-   * Show it to the person with the link (broker SPEC-002 decision 10, e.g. "K7-Q2"): the claim
-   * page shows the same code, so they can check the link is yours before approving.
-   */
-  pairingCode: string;
   expiresAt: string;
 }
 
