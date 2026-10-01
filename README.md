@@ -168,6 +168,16 @@ const escalated = await parafe.escalateScope({
 });
 ```
 
+## Breaking in 0.9.0
+
+Needs a broker with operator and principal (Parafé SPEC-002; api.parafe.ai since 2026-10-01). See [Operator and principal](#operator-and-principal-registering-for-your-users).
+
+- `register({ owner })` is now `register({ principalName })`: who the agent acts for, as free text. The broker refuses `owner`. New, optional: `actsFor: { ref }` registers the agent for one of your users (you become its operator).
+- `getClaimStatus()`: `ownerTier` → `principalTier`, `ownerEmail` → `principalEmail`, `ownerEmailVerified` → `principalEmailVerified`. New: `operatorType`, `operatorId`, `principalType`, `principalRef`. `claimed` is false for an agent acting for a platform's user that no person has claimed.
+- `verifyMandate()`: the matched agent's `orgDomain` is now `operatorDomain` (the verified domain of the org that runs it).
+- Credentials: the claims `owner`, `owner_type`, `owner_id` are now `principal_name`, `principal_type`, `principal_id`, plus `principal_ref`, `operator_type`, `operator_id`; a person's user ID is never in a credential. Credentials issued before still say `owner` until they renew: call `getClaimStatus()` and renew when `credentialCurrent` is false.
+- New, additive: `register()` returns `operatorType`, `operatorId`, `principalType`, `principalId`, `principalRef`; `completeHandshake()` and `verifyConsentLocally()` return `initiatorParties` / `targetParties`; receipts carry `participants.*.parties` (type `Parties`).
+
 ## Breaking in 0.8.0
 
 - `register()` and `generateKeyPair()` create a **P-256** (ES256) key by default, the key type AP2 uses: an AP2 receipt counts as mandate-verified only when it is signed with the participant's registered P-256 key. Pass `keyAlgorithm: 'Ed25519'` for the old default; the broker accepts both. An agent keeps the key it registered with: to move an existing Ed25519 agent to P-256, register a new agent.
