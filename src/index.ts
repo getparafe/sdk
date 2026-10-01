@@ -1351,8 +1351,16 @@ export class ParafeClient {
 
     // If renewed, update in-memory credential to the new one
     if (raw.renewed && raw.credential && this.credentials?.agentId === agentId) {
+      // Broker SPEC-002 decision 10: a self-registered agent's name became its
+      // agent ID; the new credential says which name is current.
+      let agentName = this.credentials.agentName;
+      try {
+        const name = jose.decodeJwt(raw.credential).name;
+        if (typeof name === 'string' && name) agentName = name;
+      } catch { /* keep the stored name */ }
       this.credentials = {
         ...this.credentials,
+        agentName,
         credential: raw.credential,
         credentialSdJwt: raw.credential_sd_jwt ?? this.credentials.credentialSdJwt,
         issuedAt: raw.issued_at ?? this.credentials.issuedAt,

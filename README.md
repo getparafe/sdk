@@ -174,6 +174,7 @@ Needs a broker with agent naming and the claim page (Parafé SPEC-002 decision 1
 
 - Without an API key, `register()` needs no `name` or `principalName`: `register({ type: 'personal' })`. A self-registered agent's public name is its agent ID (registry, credentials, receipts). If you send a name or principal, the person sees them only on the claim page ("Calls itself", "Says it acts for"); they're never in the credential. With an API key, `name` is still required and unique per operator.
 - Claim links (`register().claimLink`, `createClaimLink()`, `ForbiddenError.claim`) carry `pairingCode` (e.g. `K7-Q2`). Show it with the link: the claim page shows the same code, so the person can check the link is yours.
+- 0.10.1: `renewCredential()` also updates the stored agent name from the new credential (a self-registered agent's name becomes its agent ID).
 - Credentials of self-registered agents no longer carry `principal_name` or the self-chosen name. Credentials issued before still do: `getClaimStatus()` reports `credentialCurrent: false` and `renewCredential()` gives one without them (reason `identity_changed`).
 
 ## Breaking in 0.9.0

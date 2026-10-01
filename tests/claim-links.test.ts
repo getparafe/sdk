@@ -129,6 +129,16 @@ describe('claim links (Phase 1.5)', () => {
     expect(err.hint).toBe('Ask the person you act for to open this link to verify you.');
   });
 
+  it('renewal picks up the name in the new credential (a keyless agent renamed to its agent ID)', async () => {
+    const { privateKey } = generateKeyPairSync('ed25519');
+    const renewed = await new jose.SignJWT({ sub: CREDS.agentId, name: CREDS.agentId }).setProtectedHeader({ alg: 'EdDSA' }).sign(privateKey);
+    respond = () => ({ status: 200, body: { agent_id: CREDS.agentId, renewed: true, reason: 'identity_changed', credential: renewed, issued_at: 'now', expires_at: '2099-02-01T00:00:00.000Z' } });
+    const client = await clientWithCredentials();
+    expect(client.credentialStatus()).toMatchObject({ agentName: 'alex-assistant' });
+    await client.renewCredential(CREDS.agentId);
+    expect(client.credentialStatus()).toMatchObject({ agentName: CREDS.agentId });
+  });
+
   it('other 403s have no claim', () => {
     const err = mapBrokerError(403, { error: 'scope_not_found', message: 'nope' }) as ForbiddenError;
     expect(err).toBeInstanceOf(ForbiddenError);
