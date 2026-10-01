@@ -25,16 +25,17 @@ const CREDS: StoredCredentials = {
   issuedAt: '2026-09-28T00:00:00.000Z',
   expiresAt: '2099-01-01T00:00:00.000Z',
 };
-const CLAIM = { claim_url: 'https://platform.parafe.ai/claim?code=7KQ2-M9XD-4H', code: '7KQ2-M9XD-4H', expires_at: '2026-09-30T12:30:00.000Z' };
+const CLAIM = { claim_url: 'https://platform.parafe.ai/claim?code=7KQ2-M9XD-4H', code: '7KQ2-M9XD-4H', pairing_code: 'K7-Q2', expires_at: '2026-09-30T12:30:00.000Z' };
+const LINK = { url: CLAIM.claim_url, code: CLAIM.code, pairingCode: CLAIM.pairing_code, expiresAt: CLAIM.expires_at };
 
-let calls: { url: string; method: string; headers: Record<string, string> }[] = [];
+let calls: { url: string; method: string; headers: Record<string, string>; body?: Record<string, unknown> }[] = [];
 let respond: (url: string) => { status: number; body: unknown } = () => ({ status: 200, body: {} });
 const realFetch = globalThis.fetch;
 
 beforeEach(() => {
   calls = [];
   globalThis.fetch = jest.fn(async (url: unknown, init?: RequestInit) => {
-    calls.push({ url: String(url), method: init?.method ?? 'GET', headers: (init?.headers ?? {}) as Record<string, string> });
+    calls.push({ url: String(url), method: init?.method ?? 'GET', headers: (init?.headers ?? {}) as Record<string, string>, body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined });
     const { status, body } = respond(String(url));
     return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
   }) as typeof fetch;
@@ -68,15 +69,28 @@ describe('claim links (Phase 1.5)', () => {
     } });
     const client = new ParafeClient({ brokerUrl: 'https://broker.test', retries: 0 });
     const result = await client.register({ name: 'alex-assistant', type: 'personal', principalName: 'Alex' });
-    expect(result.claimLink).toEqual({ url: CLAIM.claim_url, code: CLAIM.code, expiresAt: CLAIM.expires_at });
+    expect(result.claimLink).toEqual(LINK);
     expect(calls[0].headers.Authorization).toBeUndefined();
+  });
+
+  it('a keyless register() needs no name or principal (broker SPEC-002 decision 10)', async () => {
+    respond = () => ({ status: 201, body: {
+      agent_id: 'prf_agent_new', agent_name: 'prf_agent_new', principal_name: null, identity_assurance: 'self_registered', verification_tier: 'unverified',
+      credential: 'x.y.z', issued_at: 'now', expires_at: 'later', claim: CLAIM,
+    } });
+    const client = new ParafeClient({ brokerUrl: 'https://broker.test', retries: 0 });
+    const result = await client.register({ type: 'personal' });
+    expect(calls[0].body).not.toHaveProperty('agent_name');
+    expect(calls[0].body).not.toHaveProperty('principal_name');
+    expect(result.claimLink?.pairingCode).toBe('K7-Q2');
+    expect(client.credentialStatus()).toMatchObject({ loaded: true, agentName: 'prf_agent_new' });
   });
 
   it('createClaimLink() authenticates as the agent (credential + proof), even with an API key set', async () => {
     respond = () => ({ status: 201, body: CLAIM });
     const client = await clientWithCredentials('prf_key_live_user_abc');
     const link = await client.createClaimLink();
-    expect(link).toEqual({ url: CLAIM.claim_url, code: CLAIM.code, expiresAt: CLAIM.expires_at });
+    expect(link).toEqual(LINK);
     expect(calls[0].url).toBe('https://broker.test/agents/prf_agent_alex01/claim-link');
     expect(calls[0].method).toBe('POST');
     expect(calls[0].headers.Authorization).toBe(`Bearer ${CREDS.credential}`);
@@ -111,7 +125,7 @@ describe('claim links (Phase 1.5)', () => {
     const err = await client.handshake({ targetAgentId: 'prf_agent_shop', scope: 'place-order', permissions: ['create_order'] }).catch((e) => e);
     expect(err).toBeInstanceOf(ForbiddenError);
     expect(err.code).toBe('tier_insufficient');
-    expect(err.claim).toEqual({ url: CLAIM.claim_url, code: CLAIM.code, expiresAt: CLAIM.expires_at });
+    expect(err.claim).toEqual(LINK);
     expect(err.hint).toBe('Ask the person you act for to open this link to verify you.');
   });
 

@@ -154,8 +154,8 @@ function mandateRefs(raw: unknown): MandateRef[] {
 
 const RECEIPT_TYP = 'parafe-session-receipt+jwt';
 
-function toClaimLink(raw: { claim_url: string; code: string; expires_at: string }): ClaimLink {
-  return { url: raw.claim_url, code: raw.code, expiresAt: raw.expires_at };
+function toClaimLink(raw: { claim_url: string; code: string; pairing_code: string; expires_at: string }): ClaimLink {
+  return { url: raw.claim_url, code: raw.code, pairingCode: raw.pairing_code, expiresAt: raw.expires_at };
 }
 
 function participantView(raw: Record<string, unknown> = {}): import('./types.js').ReceiptParticipant {
@@ -430,11 +430,12 @@ export class ParafeClient {
 
     // Build request body (broker uses snake_case)
     const body: Record<string, unknown> = {
-      agent_name: name,
       agent_type: type,
-      principal_name: principalName,
       public_key: publicKey,
     };
+    // Broker SPEC-002 decision 10: both optional without an API key.
+    if (name !== undefined) body.agent_name = name;
+    if (principalName !== undefined) body.principal_name = principalName;
     if (actsFor) body.acts_for = { ref: actsFor.ref };
     if (scopePolicies) {
       body.scope_policies = scopePolicies;
@@ -446,7 +447,7 @@ export class ParafeClient {
       did?: string;
       agent_name: string;
       agent_type: string;
-      principal_name: string;
+      principal_name: string | null;
       principal_type?: 'personal' | 'org' | 'external' | null;
       principal_id?: string | null;
       principal_ref?: string | null;
@@ -458,7 +459,7 @@ export class ParafeClient {
       credential_sd_jwt?: string;
       issued_at: string;
       expires_at: string;
-      claim?: { claim_url: string; code: string; expires_at: string };
+      claim?: { claim_url: string; code: string; pairing_code: string; expires_at: string };
     }>(`${this.brokerUrl}/agents/register`, {
       ...this.httpOpts,
       method: 'POST',
@@ -509,7 +510,7 @@ export class ParafeClient {
   async createClaimLink(): Promise<ClaimLink> {
     const creds = this.requireCredentials();
     const url = `${this.brokerUrl}/agents/${creds.agentId}/claim-link`;
-    const raw = await request<{ claim_url: string; code: string; expires_at: string }>(url, {
+    const raw = await request<{ claim_url: string; code: string; pairing_code: string; expires_at: string }>(url, {
       timeout: this.timeout,
       retries: this.retries,
       headers: { Authorization: `Bearer ${creds.credential}`, ...(await this.proofHeader('POST', url, { agent_id: creds.agentId })) },

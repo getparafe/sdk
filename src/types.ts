@@ -107,10 +107,20 @@ export interface Parties {
 }
 
 export interface RegisterOptions {
-  name: string;
+  /**
+   * The agent's name. Required with an API key: unique per operator (you), never reused.
+   * Without one (self-registration, broker SPEC-002 decision 10) it's optional and shown
+   * only to the person on the claim page; the agent's public name is its agent ID.
+   */
+  name?: string;
   type: 'personal' | 'enterprise';
-  /** Who the agent acts for (its principal), as free text. With an API key, the account's own name is used instead. */
-  principalName: string;
+  /**
+   * Who the agent acts for, as free text (at most 100 characters), optional. With an API key,
+   * the account's own name is used (for actsFor, what you send for your user). Without one,
+   * it's only what the agent says it acts for, shown on the claim page; the agent has no
+   * principal name in its credential until a person claims it.
+   */
+  principalName?: string;
   /**
    * Register an agent acting for one of your users (needs an API key; you become its operator).
    * `ref` is your opaque reference for the user: 1-128 letters, digits, . _ : - (no `@`: the broker
@@ -161,6 +171,11 @@ export interface ClaimLink {
   url: string;
   /** The code, shown XXXX-XXXX-XX */
   code: string;
+  /**
+   * Show it to the person with the link (broker SPEC-002 decision 10, e.g. "K7-Q2"): the claim
+   * page shows the same code, so they can check the link is yours before approving.
+   */
+  pairingCode: string;
   expiresAt: string;
 }
 
