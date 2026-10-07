@@ -3,3 +3,9 @@ dist/
 .env
 .DS_Store
 *.tsbuildinfo
+
+# Env and key files (keep .env.example tracked)
+.env*
+!.env.example
+*.pem
+*.key
