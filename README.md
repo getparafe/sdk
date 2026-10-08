@@ -179,6 +179,7 @@ Fixes from Parafé's behaviour checks of 2026-10-08. One change in behaviour: a 
 - `renewCredential()` writes the renewed credential back to the file `saveCredentials()` or `loadCredentials()` last used, if that file holds the agent being renewed, because the broker revokes the old one (`saved: true`; `saved: false` and `saveError` if the file couldn't be written, with the new credential still loaded). Credential files are written to a temporary file and renamed, so a crash never leaves half a file.
 - With an API key, `renewCredential()` of the loaded agent falls back to the agent's own credential and proof when the broker answers `agent_renews_itself` (an agent with no operator renews only itself).
 - `ValidationError` has `details` (each problem the broker found, e.g. in `register()`) and `unknownFields` (scope policy fields the broker doesn't know); when the broker sends only details, they are the message.
+- `getAgentMetrics()` reads only your own agents' track record (the broker restricted it to the owner on 2026-10-08); without an API key it signs the request with the loaded agent's key.
 
 ## New in 0.13.0
 
@@ -384,7 +385,7 @@ if (!status.credentialCurrent || status.principalTier !== status.verificationTie
 
 ## Reputation Metrics
 
-Retrieve raw trust signals for an agent — useful for assessing trustworthiness before interacting, especially with self-registered agents. Without an API key, any agent. With one, only your org's agents and agents with no org (403 for others; the public `GET /registry/agents/:id` returns `reputation_signals` for any active agent).
+Retrieve the raw trust signals (track record) of one of your own agents. Only the agent's owner can read them (broker from 2026-10-08): with an API key, an agent it manages (403 for others); without one, the loaded agent itself (signed with its key). Other agents' signals aren't public, and the registry no longer shows them: a shop sets minimums in its scope policies and the broker checks them at the handshake.
 
 ```typescript
 const metrics = await parafe.getAgentMetrics('prf_agent_...');

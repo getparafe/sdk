@@ -520,6 +520,14 @@ describe('Self-registered agents and claim links (Phase 1.5)', () => {
     });
   });
 
+  test("getAgentMetrics() reads the agent's own track record (signed with its key); another agent's is refused", async () => {
+    const own = await keyless.getAgentMetrics((keyless.credentialStatus() as { agentId: string }).agentId);
+    expect(own.tenureDays).toBeGreaterThanOrEqual(0);
+    const other = makeClient();
+    const o = await other.register({ name: uniqueName('sdk-metrics-other'), type: 'enterprise', principalName: 'SDK Test Suite' });
+    await expect(keyless.getAgentMetrics(o.agentId)).rejects.toMatchObject({ statusCode: 401 });
+  });
+
   test('a handshake refused for tier carries the claim link', async () => {
     const target = makeClient();
     const t = await target.register({

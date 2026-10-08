@@ -1539,11 +1539,16 @@ export class ParafeClient {
   }
 
   /**
-   * Retrieve reputation metrics for an agent.
+   * Retrieve reputation metrics (the track record) for one of your agents.
    * Returns raw trust signals computed from the agent's interaction history.
+   * Only the agent's owner can read them (broker from 2026-10-08): with an API
+   * key, an agent it manages; without one, the loaded agent itself (credential
+   * and proof). Shops don't read other agents' signals: the broker checks their
+   * reputation floors at the handshake.
    *
    * @throws {NotFoundError} 404 — agent not found
-   * @throws {AuthError} 401 — invalid or missing API key
+   * @throws {AuthError} 401 — no API key, and the agent isn't the loaded one
+   * @throws {ForbiddenError} 403 — the API key doesn't manage this agent
    * @throws {NetworkError} Network or timeout error after retries exhausted
    */
   async getAgentMetrics(agentId: string): Promise<AgentMetrics> {
@@ -1584,7 +1589,9 @@ export class ParafeClient {
         avg_per_session: number;
       };
     }>(`${this.brokerUrl}/agents/${agentId}/metrics`, {
-      ...this.httpOpts,
+      ...(!this.apiKey && this.credentials?.agentId === agentId
+        ? await this.agentHttpOpts('GET', `${this.brokerUrl}/agents/${agentId}/metrics`, { agent_id: agentId }, agentId)
+        : this.httpOpts),
       method: 'GET',
     });
 
