@@ -168,6 +168,10 @@ const escalated = await parafe.escalateScope({
 });
 ```
 
+## New in 0.12.0
+
+- `waitForClaim()` waits for the person to approve the claim link and returns as soon as they do; `getClaimStatus({ waitSeconds })` asks the broker to wait (up to 60 seconds). Needs a broker from 2026-10-08 (api.parafe.ai and staging have it). See [Self-registered agents and claim links](#self-registered-agents-and-claim-links).
+
 ## Breaking in 0.11.0
 
 - `pairingCode` is gone from claim links (`register().claimLink`, `createClaimLink()`, `ForbiddenError.claim`). The link's own `code` does the same job: tell the person the code with the link ("The page will show the code 7KQ2-M9XD-4H"); the claim page shows it first. Needs the broker from 2026-10-01 (later the same day as 0.10.0).
@@ -330,9 +334,12 @@ try {
   }
 }
 
-// 4. After they approve: the agent is theirs ('claimed', their verification tier).
+// 4. Wait for the approval. The broker answers the moment they approve (each request
+//    waits up to 25 seconds; gives up after 30 minutes, the link's life, and returns
+//    the last status). Then the agent is theirs ('claimed', their verification tier).
 //    Handshakes use this at once. Renew so the credential says it too.
-const status = await parafe.getClaimStatus();
+const status = await parafe.waitForClaim();
+if (!status.claimed) { /* timed out: createClaimLink() and show the new link */ }
 // { claimed: true, identityAssurance: 'claimed', verificationTier: 'unverified',
 //   principalTier: 'unverified', credentialCurrent: false, registeredAt: '2026-09-30T…',
 //   operatorType: null, operatorId: null, principalType: 'personal', principalRef: null }
@@ -343,13 +350,14 @@ if (!status.credentialCurrent || status.principalTier !== status.verificationTie
 
 - `claimed` meets a `minimum_identity_assurance: 'registered'` policy; `self_registered` does not.
 - The agent gets the person's verification tier. If their email isn't verified yet, the tier rises once they verify it: check `getClaimStatus()` (`principalTier` above `verificationTier`) and renew.
-- `createClaimLink()`, `getClaimStatus()` and self-renewal authenticate as the agent (credential plus proof of possession). `createClaimLink()` answers 409 `already_claimed` once a person or org has claimed the agent.
+- `waitForClaim({ timeoutMs, waitSeconds })` (0.12.0, a broker from 2026-10-08) asks the broker to hold each request until the claim is approved, so it needs few requests: platforms that put every outbound request behind an approval show few prompts. `getClaimStatus({ waitSeconds })` makes one such request. Don't poll `getClaimStatus()` every few seconds instead.
+- `createClaimLink()`, `getClaimStatus()`, `waitForClaim()` and self-renewal authenticate as the agent (credential plus proof of possession). `createClaimLink()` answers 409 `already_claimed` once a person or org has claimed the agent.
 - The person can revoke the agent from the portal like any of their agents.
 - **What the person sees.** The claim page shows the link's code first, then "Platform: Unknown (self-registered)" (Parafé only names a platform it authenticated), and whatever the agent sent at registration as "Calls itself" (`name`) and "Says it acts for" (`principalName`), unverified. The person can give the agent a private name of their own; only they see it.
 - **For an organization.** An owner or admin of an org can claim the agent for the org instead of for themselves. It then gets the org's verification tier and stays with the org if that person leaves it.
 - **Principal email (opt-in).** The claim page has a box "Share my email with the platform that runs this agent", off by default; the person can also turn it on or off later on the agent's page. Only while it's on, `getClaimStatus()` returns `principalEmail` and `principalEmailVerified`. It is never in the credential or the SD-JWT VC, which every counterparty sees.
 - **Key fingerprint.** The claim page shows the agent's key fingerprint under "Details" (the link's code comes first). It is the RFC 7638 JWK thumbprint of the agent's public key: the 43-character base64url SHA-256 of the canonical JWK, shown in full, not grouped. It's the same value as a consent token's `cnf.jkt`. Show the identical string on your platform with `publicKeyThumbprint(agent.publicKey)`. Don't use the credential's `pub_key_thumbprint` claim: it's a different hash (hex SHA-256 of the base64 SPKI) and won't match.
-- **Public record.** `GET https://api.parafe.ai/registry/agents/<agent_id>` (no auth) returns `registered_at`, `status`, `verification_tier`, `identity_assurance`, `operator_type` (and `operator_name` for an org) and `principal_type` for an active agent (never a person's name or ID) (listed or unlisted). A revoked or suspended agent returns a minimal record: `agent_id`, `did`, `status`, `registered_at` and `revoked_at` (null for agents revoked before the broker recorded the date). `parafe.ai/registry/<agent_id>` shows the same.
+- **Public record.** The registry's list (`GET /registry/agents`) shows a self-registered agent once a person has claimed it. `GET https://api.parafe.ai/registry/agents/<agent_id>` (no auth) returns `registered_at`, `status`, `verification_tier`, `identity_assurance`, `operator_type` (and `operator_name` for an org) and `principal_type` for an active agent (never a person's name or ID) (listed or unlisted). A revoked or suspended agent returns a minimal record: `agent_id`, `did`, `status`, `registered_at` and `revoked_at` (null for agents revoked before the broker recorded the date). `parafe.ai/registry/<agent_id>` shows the same.
 
 ## Reputation Metrics
 

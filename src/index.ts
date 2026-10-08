@@ -13,7 +13,7 @@
 import { generateKeyPair, signChallenge, signProof, createPresentationProof, signActionReceipt as signActionReceiptJws, sha256b64u, jsonHash, ap2MandateReferences, signAp2ReceiptJws } from './crypto.js';
 import { encryptCredentials, decryptCredentials } from './credentials.js';
 import { request } from './http.js';
-import { ValidationError, AuthError, NotFoundError, ParafeError, ConflictError } from './errors.js';
+import { ValidationError, AuthError, NotFoundError, ParafeError, ConflictError, NetworkError, InternalError } from './errors.js';
 import * as jose from 'jose';
 import type {
   Parties,
@@ -347,6 +347,14 @@ function mandateResult(raw: Record<string, unknown>): VerifyMandateResult {
   return out;
 }
 
+/** claim-status `wait`: whole seconds, 0 to 60 (the broker's limit). */
+function checkClaimWait(seconds: number): number {
+  if (!Number.isInteger(seconds) || seconds < 0 || seconds > 60) {
+    throw new RangeError('waitSeconds must be a whole number of seconds from 0 to 60');
+  }
+  return seconds;
+}
+
 export class ParafeClient {
   private readonly brokerUrl: string;
   private readonly apiKey: string;
@@ -525,8 +533,9 @@ export class ParafeClient {
    * (reason `identity_changed`, or `tier_changed` after the principal verifies their
    * email). Handshakes use a claim as soon as it is approved.
    */
-  async getClaimStatus(): Promise<ClaimStatus> {
+  async getClaimStatus(opts: { waitSeconds?: number } = {}): Promise<ClaimStatus> {
     const creds = this.requireCredentials();
+    const wait = checkClaimWait(opts.waitSeconds ?? 0);
     const url = `${this.brokerUrl}/agents/${creds.agentId}/claim-status`;
     const raw = await request<{
       claimed: boolean;
@@ -541,8 +550,9 @@ export class ParafeClient {
       registered_at: string;
       principal_email?: string;
       principal_email_verified?: boolean;
-    }>(url, {
-      timeout: this.timeout,
+    }>(wait ? `${url}?wait=${wait}` : url, {
+      // The broker holds a waiting request up to `wait` seconds: allow for it.
+      timeout: wait ? Math.max(this.timeout, (wait + 15) * 1000) : this.timeout,
       retries: this.retries,
       headers: { Authorization: `Bearer ${creds.credential}`, ...(await this.proofHeader('GET', url, { agent_id: creds.agentId })) },
       method: 'GET',
@@ -560,6 +570,38 @@ export class ParafeClient {
       registeredAt: raw.registered_at,
       ...(raw.principal_email !== undefined ? { principalEmail: raw.principal_email, principalEmailVerified: Boolean(raw.principal_email_verified) } : {}),
     };
+  }
+
+  /**
+   * Waits until the person the agent acts for approves its claim link, or
+   * `timeoutMs` passes (default 30 minutes, a claim link's life). Each request
+   * asks the broker to hold it up to `waitSeconds` (default 25, at most 60) and
+   * answer the moment the claim is approved, so this needs few requests and
+   * returns at once. Returns the last status: check `claimed`, then call
+   * `renewCredential()` (`credentialCurrent` is false after a claim). If it
+   * times out unclaimed, make a new link with `createClaimLink()`.
+   */
+  async waitForClaim(opts: { timeoutMs?: number; waitSeconds?: number } = {}): Promise<ClaimStatus> {
+    const waitSeconds = checkClaimWait(opts.waitSeconds ?? 25);
+    if (waitSeconds < 1) throw new RangeError('waitSeconds must be at least 1 for waitForClaim()');
+    const deadline = Date.now() + (opts.timeoutMs ?? 30 * 60 * 1000);
+    let status: ClaimStatus | undefined;
+    let failures = 0;
+    do {
+      const left = Math.ceil((deadline - Date.now()) / 1000);
+      try {
+        status = await this.getClaimStatus({ waitSeconds: Math.max(1, Math.min(waitSeconds, left)) });
+        failures = 0;
+      } catch (err) {
+        // A deploy or a dropped connection: pause, then ask again (with a new
+        // proof). Five failures in a row is not a deploy: give up.
+        const transient = err instanceof NetworkError || err instanceof InternalError;
+        if (!transient || ++failures >= 5 || Date.now() >= deadline) throw err;
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+    } while (!status?.claimed && Date.now() < deadline);
+    if (!status) throw new NetworkError('Could not reach the broker before waitForClaim() timed out');
+    return status;
   }
 
   // ── Credential persistence ───────────────────────────────────────────────────

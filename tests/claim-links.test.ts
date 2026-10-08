@@ -118,6 +118,65 @@ describe('claim links (Phase 1.5)', () => {
     expect(claims).toMatchObject({ htm: 'GET', agent_id: CREDS.agentId });
   });
 
+  const STATUS = (claimed: boolean) => ({
+    claimed, identity_assurance: claimed ? 'claimed' : 'self_registered', verification_tier: 'unverified', principal_tier: claimed ? 'unverified' : null,
+    credential_current: !claimed, registered_at: '2026-09-30T12:00:00.000Z', operator_type: null, operator_id: null, principal_type: claimed ? 'personal' : null, principal_ref: null,
+  });
+
+  it('getClaimStatus({ waitSeconds }) asks the broker to wait, with the proof bound to the URL without the query', async () => {
+    respond = () => ({ status: 200, body: STATUS(false) });
+    const client = await clientWithCredentials();
+    await client.getClaimStatus({ waitSeconds: 25 });
+    expect(calls[0].url).toBe('https://broker.test/agents/prf_agent_alex01/claim-status?wait=25');
+    const claims = await proofClaims(calls[0].headers);
+    expect(claims).toMatchObject({ htm: 'GET', htu: 'https://broker.test/agents/prf_agent_alex01/claim-status', agent_id: CREDS.agentId });
+  });
+
+  it('waitForClaim() asks again, with a new proof each time, until the person approves', async () => {
+    let n = 0;
+    respond = () => ({ status: 200, body: STATUS(++n >= 3) });
+    const client = await clientWithCredentials();
+    const status = await client.waitForClaim({ waitSeconds: 5 });
+    expect(status.claimed).toBe(true);
+    expect(calls).toHaveLength(3);
+    for (const c of calls) expect(c.url).toBe('https://broker.test/agents/prf_agent_alex01/claim-status?wait=5');
+    const jtis = await Promise.all(calls.map(async (c) => (await proofClaims(c.headers)).jti));
+    expect(new Set(jtis).size).toBe(3);
+  });
+
+  it('waitForClaim() gives up after timeoutMs and returns the last status', async () => {
+    respond = () => ({ status: 200, body: STATUS(false) });
+    const client = await clientWithCredentials();
+    const status = await client.waitForClaim({ waitSeconds: 1, timeoutMs: 1 });
+    expect(status.claimed).toBe(false);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('waitForClaim() refuses a wait over 60 seconds, or of 0 (it would ask without pausing)', async () => {
+    const client = await clientWithCredentials();
+    await expect(client.waitForClaim({ waitSeconds: 61 })).rejects.toThrow(/0 to 60/);
+    await expect(client.waitForClaim({ waitSeconds: 0 })).rejects.toThrow(/at least 1/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('waitForClaim() rides out a deploy (502) and asks again with a new proof', async () => {
+    let n = 0;
+    respond = () => (++n === 1 ? { status: 502, body: { error: 'bad_gateway' } } : { status: 200, body: STATUS(true) });
+    const client = await clientWithCredentials();
+    const status = await client.waitForClaim({ waitSeconds: 5 });
+    expect(status.claimed).toBe(true);
+    expect(calls).toHaveLength(2);
+    const [a, b] = await Promise.all(calls.map(async (c) => (await proofClaims(c.headers)).jti));
+    expect(a).not.toBe(b);
+  });
+
+  it('waitForClaim() stops on a refusal (the agent was revoked)', async () => {
+    respond = () => ({ status: 409, body: { error: 'agent_inactive', message: 'Agent is revoked' } });
+    const client = await clientWithCredentials();
+    await expect(client.waitForClaim({ waitSeconds: 5 })).rejects.toThrow(/revoked/);
+    expect(calls).toHaveLength(1);
+  });
+
   it('a handshake refused for tier carries .claim and .hint', async () => {
     respond = () => ({ status: 403, body: {
       error: 'tier_insufficient', message: "Scope 'place-order' requires verification_tier 'email_verified'",
