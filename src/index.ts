@@ -12,7 +12,7 @@
 
 import { generateKeyPair, signChallenge, signProof, createPresentationProof, signActionReceipt as signActionReceiptJws, sha256b64u, jsonHash, ap2MandateReferences, signAp2ReceiptJws } from './crypto.js';
 import { encryptCredentials, decryptCredentials } from './credentials.js';
-import { request } from './http.js';
+import { request, type RequestOptions } from './http.js';
 import { ValidationError, AuthError, NotFoundError, ParafeError, ConflictError, NetworkError, InternalError } from './errors.js';
 import * as jose from 'jose';
 import type {
@@ -363,8 +363,8 @@ export class ParafeClient {
 
   /** Currently loaded credentials (null when not registered or loaded) */
   private credentials: StoredCredentials | null = null;
-  /** The file saveCredentials()/loadCredentials() last used: a renewal is written back to it. */
-  private credentialFile: { path: string; passphrase: string } | null = null;
+  /** The file saveCredentials()/loadCredentials() last used, and whose credential it holds: a renewal of that agent is written back to it. */
+  private credentialFile: { path: string; passphrase: string; agentId: string } | null = null;
 
   /** Static namespace for authorization helpers */
   static readonly authorization = authorization;
@@ -625,7 +625,7 @@ export class ParafeClient {
   async saveCredentials(filePath: string, passphrase: string): Promise<void> {
     const creds = this.requireCredentials();
     await encryptCredentials(filePath, creds, passphrase);
-    this.credentialFile = { path: filePath, passphrase };
+    this.credentialFile = { path: filePath, passphrase, agentId: creds.agentId };
   }
 
   /**
@@ -634,7 +634,7 @@ export class ParafeClient {
    */
   async loadCredentials(filePath: string, passphrase: string): Promise<void> {
     this.credentials = await decryptCredentials(filePath, passphrase);
-    this.credentialFile = { path: filePath, passphrase };
+    this.credentialFile = { path: filePath, passphrase, agentId: this.credentials.agentId };
   }
 
   /**
@@ -862,6 +862,14 @@ export class ParafeClient {
         ...(agentId ? { agent_id: agentId } : {}),
       },
     });
+
+    // The broker checks agent_id since 2026-10-08; check here too, so an older
+    // broker (which ignores it) can't pass a token issued for another agent.
+    if (agentId && raw.valid) {
+      let target: unknown;
+      try { target = jose.decodeJwt(opts.consentToken).target_agent_id; } catch { target = undefined; }
+      if (target !== agentId) throw new AuthError(`This consent token was issued for ${String(target)}, not ${agentId}`, 'wrong_audience');
+    }
 
     return {
       valid: raw.valid,
@@ -1419,10 +1427,8 @@ export class ParafeClient {
    */
   async renewCredential(agentId: string): Promise<RenewCredentialResult> {
     const url = `${this.brokerUrl}/agents/${agentId}/renew`;
-    const opts = this.apiKey
-      ? this.httpOpts
-      : await this.agentHttpOpts('POST', url, { agent_id: agentId }, agentId);
-    const raw = await request<{
+    const selfOpts = () => this.agentHttpOpts('POST', url, { agent_id: agentId }, agentId);
+    const send = async (opts: RequestOptions) => request<{
       agent_id: string;
       renewed: boolean;
       reason?: string;
@@ -1438,6 +1444,19 @@ export class ParafeClient {
       ...opts,
       method: 'POST',
     });
+    let raw: Awaited<ReturnType<typeof send>>;
+    if (!this.apiKey) {
+      raw = await send(await selfOpts());
+    } else {
+      try {
+        raw = await send(this.httpOpts);
+      } catch (err) {
+        // An agent with no operator renews only itself (the broker refuses the key):
+        // if it is the loaded agent, renew it with its credential and a proof.
+        if (!(err instanceof ConflictError && err.code === 'agent_renews_itself' && this.credentials?.agentId === agentId)) throw err;
+        raw = await send(await selfOpts());
+      }
+    }
 
     // If renewed, update in-memory credential to the new one, and the file it came
     // from: the broker revoked the old credential, so a stale file locks the agent out.
@@ -1459,7 +1478,8 @@ export class ParafeClient {
         issuedAt: raw.issued_at ?? this.credentials.issuedAt,
         expiresAt: raw.expires_at ?? this.credentials.expiresAt,
       };
-      if (this.credentialFile) {
+      // Only the file that holds this agent (another agent may have been loaded from it).
+      if (this.credentialFile && this.credentialFile.agentId === agentId) {
         try {
           await encryptCredentials(this.credentialFile.path, this.credentials, this.credentialFile.passphrase);
           saved = true;

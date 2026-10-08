@@ -12,7 +12,7 @@
  */
 
 import * as nodeCrypto from 'node:crypto';
-import { readFile, writeFile, chmod } from 'node:fs/promises';
+import { readFile, writeFile, chmod, rename, rm } from 'node:fs/promises';
 import type { StoredCredentials, EncryptedCredentialFile } from './types.js';
 
 const SCRYPT_N = 16384;
@@ -61,7 +61,16 @@ export async function encryptCredentials(
     ciphertext: ciphertextBuf.toString('base64'),
   };
 
-  await writeFile(filePath, JSON.stringify(fileData, null, 2), 'utf8');
+  // Write a temporary file and rename it over the old one, so a crash mid-write
+  // never leaves a half-written file (it holds the agent's only private key).
+  const tmpPath = `${filePath}.${nodeCrypto.randomBytes(6).toString('hex')}.tmp`;
+  try {
+    await writeFile(tmpPath, JSON.stringify(fileData, null, 2), { encoding: 'utf8', mode: 0o600 });
+    await rename(tmpPath, filePath);
+  } catch (err) {
+    await rm(tmpPath, { force: true });
+    throw err;
+  }
   await chmod(filePath, 0o600);
 }
 

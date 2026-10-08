@@ -104,6 +104,13 @@ describe('consent token audience (S-69)', () => {
     respond = () => ({ status: 401, body: { valid: false, error: 'wrong_audience', reason: 'This consent token was issued for x' } });
     await expect(client.verifyConsent({ consentToken: token, action: 'a', sessionId: 'sess_1' })).rejects.toMatchObject({ code: 'wrong_audience' });
   });
+
+  it('verifyConsent checks the target itself too (a broker that ignores agent_id)', async () => {
+    const { client } = await loadedClient();
+    const token = await consentToken('prf_agent_other99');
+    respond = () => ({ status: 200, body: { valid: true, action: 'a', permitted: true, session_id: 'sess_1' } });
+    await expect(client.verifyConsent({ consentToken: token, action: 'a', sessionId: 'sess_1' })).rejects.toMatchObject({ code: 'wrong_audience' });
+  });
 });
 
 describe('renewCredential() keeps the credential file current', () => {
@@ -121,12 +128,42 @@ describe('renewCredential() keeps the credential file current', () => {
   it('reports a file it could not write, and keeps the new credential loaded', async () => {
     const { client } = await loadedClient();
     // Point the remembered file somewhere unwritable.
-    (client as unknown as { credentialFile: { path: string; passphrase: string } }).credentialFile = { path: '/nonexistent-dir/creds.enc', passphrase: 'pass' };
+    (client as unknown as { credentialFile: { path: string; passphrase: string; agentId: string } }).credentialFile = { path: '/nonexistent-dir/creds.enc', passphrase: 'pass', agentId: CREDS.agentId };
     respond = () => ({ status: 200, body: { agent_id: CREDS.agentId, renewed: true, credential: 'new.credential.jwt' } });
     const r = await client.renewCredential(CREDS.agentId);
     expect(r.saved).toBe(false);
     expect(r.saveError).toBeTruthy();
     expect(client.exportKeys().credential).toBe('new.credential.jwt');
+  });
+
+  it("never writes another agent's file (a different agent loaded or registered since)", async () => {
+    const { client, file } = await loadedClient();
+    // Another agent replaces the loaded one in memory (as register() does).
+    const otherKeys = generateKeyPairSync('ed25519');
+    const other: StoredCredentials = { ...CREDS, agentId: 'prf_agent_other02', privateKey: otherKeys.privateKey.export({ type: 'pkcs8', format: 'der' }).toString('base64') };
+    (client as unknown as { credentials: StoredCredentials }).credentials = other;
+    respond = () => ({ status: 200, body: { agent_id: other.agentId, renewed: true, credential: 'other.new.jwt' } });
+    const r = await client.renewCredential(other.agentId);
+    expect(r).not.toHaveProperty('saved');
+    const onDisk = await decryptCredentials(file, 'pass');
+    expect(onDisk.agentId).toBe(CREDS.agentId);
+    expect(onDisk.privateKey).toBe(CREDS.privateKey);
+  });
+
+  it('with an API key, an agent that renews only itself is renewed with its credential and a proof', async () => {
+    const file = join(tmpdir(), `parafe-renew-test-${Date.now()}-key.enc`);
+    files.push(file);
+    await encryptCredentials(file, CREDS, 'pass');
+    const client = new ParafeClient({ brokerUrl: 'https://broker.test', apiKey: 'prf_key_live_x', retries: 0 });
+    await client.loadCredentials(file, 'pass');
+    let call = 0;
+    respond = () => (++call === 1
+      ? { status: 409, body: { error: 'agent_renews_itself', message: 'This agent renews its own credential' } }
+      : { status: 200, body: { agent_id: CREDS.agentId, renewed: true, credential: 'self.renewed.jwt' } });
+    const r = await client.renewCredential(CREDS.agentId);
+    expect(r.renewed).toBe(true);
+    expect(call).toBe(2);
+    expect(client.exportKeys().credential).toBe('self.renewed.jwt');
   });
 
   it("doesn't touch the file when nothing was renewed", async () => {

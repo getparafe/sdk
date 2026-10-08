@@ -174,9 +174,10 @@ const escalated = await parafe.escalateScope({
 
 Fixes from Parafé's behaviour checks of 2026-10-08. One change in behaviour: a consent token issued for another agent than the loaded one now throws `AuthError` (`wrong_audience`); pass `agentId: null` to check without it.
 
-- A consent token must be for the agent checking it. `verifyConsentLocally()` and `verifyConsent()` check that the token's target is the loaded agent (unless the loaded agent is the token's initiator), and refuse a token issued for another agent with `AuthError` code `wrong_audience`. Pass `agentId` to name the agent to check against, or `agentId: null` to skip the check. `verifyConsentLocally()` also returns `targetAgentId`. The online check needs the broker from 2026-10-08 (an older broker ignores `agent_id`).
+- A consent token must be for the agent checking it. `verifyConsentLocally()` and `verifyConsent()` check that the token's target is the loaded agent (unless the loaded agent is the token's initiator), and refuse a token issued for another agent with `AuthError` code `wrong_audience`. Pass `agentId` to name the agent to check against, or `agentId: null` to skip the check. `verifyConsentLocally()` also returns `targetAgentId`. `verifyConsent()` also compares the token's target itself after the broker's answer, so an older broker (which ignores `agent_id`) can't pass a token issued for another agent.
 - `verifyConsent()` refusals carry the broker's code: `token_expired`, `token_invalid`, `wrong_audience`, `session_mismatch`, `session_not_found`, `session_inactive`, `agent_revoked` or `proof_invalid` (`err.code`).
-- `renewCredential()` writes the renewed credential back to the file `saveCredentials()` or `loadCredentials()` last used, because the broker revokes the old one (`saved: true`; `saved: false` and `saveError` if the file couldn't be written, with the new credential still loaded).
+- `renewCredential()` writes the renewed credential back to the file `saveCredentials()` or `loadCredentials()` last used, if that file holds the agent being renewed, because the broker revokes the old one (`saved: true`; `saved: false` and `saveError` if the file couldn't be written, with the new credential still loaded). Credential files are written to a temporary file and renamed, so a crash never leaves half a file.
+- With an API key, `renewCredential()` of the loaded agent falls back to the agent's own credential and proof when the broker answers `agent_renews_itself` (an agent with no operator renews only itself).
 - `ValidationError` has `details` (each problem the broker found, e.g. in `register()`) and `unknownFields` (scope policy fields the broker doesn't know); when the broker sends only details, they are the message.
 
 ## New in 0.13.0
@@ -295,8 +296,8 @@ await parafe.revokeAgent('prf_agent_...');
 // Renew the credential: re-issued when the principal's tier changed, when the
 // credential no longer shows the agent's principal or operator (e.g. after a claim), or it is
 // expired or within 7 days of expiry. Without an API key, the loaded agent renews itself
-// (credential + proof of possession), even after its credential expired (broker from
-// 2026-10-08): renewal is the one thing an expired credential can still do. An agent with an
+// (credential + proof of possession), even within a year after its credential expired
+// (broker from 2026-10-08): renewal is the one thing an expired credential can still do. An agent with an
 // operator can also be renewed with the operator's API key. The new credential is written
 // back to the credential file.
 await parafe.renewCredential('prf_agent_...');
