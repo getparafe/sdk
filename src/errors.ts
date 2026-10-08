@@ -18,9 +18,16 @@ export class ParafeError extends Error {
 }
 
 export class ValidationError extends ParafeError {
-  constructor(message: string, code = 'validation_error') {
+  /** Each problem the broker found (e.g. registration fields), when it lists them. */
+  public readonly details?: string[];
+  /** Scope policy fields the broker doesn't know. */
+  public readonly unknownFields?: string[];
+
+  constructor(message: string, code = 'validation_error', extra: { details?: string[]; unknownFields?: string[] } = {}) {
     super(message, code, 400);
     this.name = 'ValidationError';
+    if (extra.details) this.details = extra.details;
+    if (extra.unknownFields) this.unknownFields = extra.unknownFields;
   }
 }
 
@@ -111,11 +118,13 @@ export class NetworkError extends ParafeError {
  */
 export function mapBrokerError(statusCode: number, body: Record<string, unknown>): ParafeError {
   const code = (body.error as string) || 'unknown_error';
-  const message = (body.message as string) || (body.reason as string) || (body.error as string) || 'Unknown error';
+  const strings = (v: unknown) => (Array.isArray(v) ? v.map(String) : undefined);
+  const details = strings(body.details);
+  const message = (body.message as string) || (body.reason as string) || details?.join('; ') || (body.error as string) || 'Unknown error';
 
   switch (statusCode) {
     case 400:
-      return new ValidationError(message, code);
+      return new ValidationError(message, code, { details, unknownFields: strings(body.unknown_fields) });
     case 401:
       return new AuthError(message, code);
     case 403: {

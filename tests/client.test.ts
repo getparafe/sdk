@@ -334,6 +334,12 @@ describe('Full integration flow', () => {
     expect(local.initiatorAgentId).toBe(initiatorAgentId);
     expect(local.keyThumbprint).toBeTruthy();
     expect(local.initiatorProof).toBe('pop');
+    expect(local.targetAgentId).toBe(targetAgentId);
+  });
+
+  test('a token checked for another agent is refused (S-69: wrong_audience)', async () => {
+    await expect(initiatorClient.verifyConsentLocally(consentToken, undefined, { agentId: initiatorAgentId })).rejects.toMatchObject({ code: 'wrong_audience' });
+    await expect(initiatorClient.verifyConsent({ consentToken, action: 'read_data', sessionId, agentId: initiatorAgentId })).rejects.toMatchObject({ code: 'wrong_audience' });
   });
 
   test('verifyConsent() with a presentation proof — the broker checks it against cnf.jkt', async () => {

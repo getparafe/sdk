@@ -297,6 +297,12 @@ export interface VerifyConsentOptions {
   sessionId: string;
   /** The initiator's presentation proof, if it sent one; the broker checks it against the token's cnf.jkt. */
   presentationProof?: string;
+  /**
+   * The agent the token must be for (its target): the broker refuses a token issued
+   * for another agent (`AuthError`, code `wrong_audience`). Defaults to the loaded
+   * agent, unless the loaded agent is the token's initiator; `null` skips the check.
+   */
+  agentId?: string | null;
 }
 
 export interface VerifyConsentResult {
@@ -548,6 +554,8 @@ export interface VerifyConsentLocalResult {
   initiatorAgentId?: string;
   /** Target agent DID (`aud`). */
   audience?: string;
+  /** Target agent ID (`target_agent_id`). */
+  targetAgentId?: string;
   /** cnf.jkt: thumbprint of the key the token is bound to; null for tokens issued before key binding. */
   keyThumbprint: string | null;
   /** How the initiator proved itself when the token was issued. */
@@ -604,6 +612,14 @@ export interface RenewCredentialResult {
   issuedAt?: string;
   expiresAt?: string;
   message?: string;
+  /**
+   * After a renewal of the loaded agent's credential: true when the credential
+   * file last used by `saveCredentials()` or `loadCredentials()` now holds the new
+   * credential (the broker revoked the old one). Absent when there is no file.
+   */
+  saved?: boolean;
+  /** Why the credential file could not be updated (the new credential is still loaded). */
+  saveError?: string;
 }
 
 // ── updateScopePolicies() ──

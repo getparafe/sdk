@@ -10,7 +10,7 @@ Official Node.js/TypeScript SDK for the Parafe Trust Broker. Published on npm as
 - `src/credentials.ts` — Credential encryption at rest via AES-256-GCM. Save/load from disk.
 - `src/errors.ts` — Error class hierarchy (`ParafeError` → `AuthError`, `ForbiddenError`, `NotFoundError`, etc.).
 - `src/types.ts` — TypeScript type definitions for all broker API types.
-- `tests/` — Jest. `client.test.ts` is the integration suite (needs a running broker, `PARAFE_TEST_BROKER_URL`); the rest are unit tests (`npm run test:unit` runs eight of them; `ap2-mandates.test.ts`, which stubs fetch, runs only with `npm test`).
+- `tests/` — Jest. `client.test.ts` is the integration suite (needs a running broker, `PARAFE_TEST_BROKER_URL`); the rest are unit tests (`npm run test:unit` runs nine of them; `ap2-mandates.test.ts`, which stubs fetch, runs only with `npm test`).
 
 ## Running
 
@@ -25,7 +25,8 @@ npm test               # All Jest tests, including the integration suite (needs 
 
 - **Dual module output** — Builds to both CJS (`dist/cjs/`) and ESM (`dist/esm/`) via separate tsconfig files. `package.json` has `main` (CJS), `module` (ESM), and `types` exports. The package is `"type": "module"`, so `build:cjs` writes `dist/cjs/package.json` (`{ "type": "commonjs" }`, `scripts/mark-cjs.cjs`), and the CJS build emits its own `.d.ts` (`exports.require.types`); without them `require()` throws and CommonJS TypeScript projects get TS1479 (P-48, fixed after 0.12.0). CI checks both entry points load.
 - **snake_case → camelCase** — Broker API uses snake_case. SDK normalizes everything to camelCase for TypeScript consumers. This happens consistently in `index.ts`.
-- **Credential encryption** — `credentials.ts` uses AES-256-GCM with a passphrase-derived key. Credentials are encrypted before writing to disk, decrypted on load.
+- **Credential encryption** — `credentials.ts` uses AES-256-GCM with a passphrase-derived key. Credentials are encrypted before writing to disk, decrypted on load. The client remembers the file `saveCredentials()`/`loadCredentials()` last used (path and passphrase, in memory) and `renewCredential()` writes a renewed credential back to it: the broker revokes the old one.
+- **Consent audience (S-69)** — `verifyConsentLocally()` and `verifyConsent()` check the token's `target_agent_id` against `agentId`, by default the loaded agent unless it is the token's initiator (`expectedTarget()`); `null` skips. Online, it is sent as `agent_id` and the broker refuses `wrong_audience`.
 - **Broker keys** — `verifyConsentLocally` and `verifyReceiptLocally` resolve broker keys from the JWKS (`getJwks()`, cached 5 min, falls back to `/public-key` on a pre-2026-09-30 broker). The legacy base64 SPKI key is still accepted; it's wrapped in PEM headers without re-encoding.
 - **Proof of possession (0.4.0)** — every call that authenticates with the agent's credential also sends a `Parafe-PoP` header signed with its key (`proofHeader`/`agentHttpOpts`). Keep this for any new credential-authenticated method.
 - **Receipts are JWS (0.4.0)** — `SessionReceipt.receipt` is the evidence; the rest is decoded from it. Never rebuild or re-serialize a receipt.

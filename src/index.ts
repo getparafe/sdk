@@ -363,6 +363,8 @@ export class ParafeClient {
 
   /** Currently loaded credentials (null when not registered or loaded) */
   private credentials: StoredCredentials | null = null;
+  /** The file saveCredentials()/loadCredentials() last used: a renewal is written back to it. */
+  private credentialFile: { path: string; passphrase: string } | null = null;
 
   /** Static namespace for authorization helpers */
   static readonly authorization = authorization;
@@ -623,13 +625,16 @@ export class ParafeClient {
   async saveCredentials(filePath: string, passphrase: string): Promise<void> {
     const creds = this.requireCredentials();
     await encryptCredentials(filePath, creds, passphrase);
+    this.credentialFile = { path: filePath, passphrase };
   }
 
   /**
    * Load credentials from an AES-256-GCM encrypted file into memory.
+   * A later renewal of this agent's credential is written back to the same file.
    */
   async loadCredentials(filePath: string, passphrase: string): Promise<void> {
     this.credentials = await decryptCredentials(filePath, passphrase);
+    this.credentialFile = { path: filePath, passphrase };
   }
 
   /**
@@ -836,6 +841,7 @@ export class ParafeClient {
    * Verify a consent token against a specific action and session.
    */
   async verifyConsent(opts: VerifyConsentOptions): Promise<VerifyConsentResult> {
+    const agentId = this.expectedTarget(opts.consentToken, opts.agentId);
     const raw = await request<{
       valid: boolean;
       action: string;
@@ -853,6 +859,7 @@ export class ParafeClient {
         action: opts.action,
         session_id: opts.sessionId,
         ...(opts.presentationProof ? { proof: opts.presentationProof } : {}),
+        ...(agentId ? { agent_id: agentId } : {}),
       },
     });
 
@@ -879,13 +886,18 @@ export class ParafeClient {
    * when omitted), or the legacy base64 Ed25519 key from `getPublicKey()` for
    * tokens issued before 2026-09-30.
    *
+   * The token must be for `opts.agentId` (its target), by default the loaded
+   * agent unless that agent is the token's initiator; `agentId: null` skips the
+   * check. A token for another agent throws `AuthError` (`wrong_audience`).
+   *
    * This checks the token, not who presents it. A target receiving a key-bound
    * token should also check the initiator's presentation proof (the A2A
    * extension does), or pass it to `verifyConsent({ presentationProof })`.
    */
   async verifyConsentLocally(
     consentToken: string,
-    keys?: BrokerJwks | string
+    keys?: BrokerJwks | string,
+    opts: { agentId?: string | null } = {}
   ): Promise<VerifyConsentLocalResult> {
     let key: jose.KeyLike | ReturnType<typeof jose.createLocalJWKSet>;
     if (typeof keys === 'string') {
@@ -916,6 +928,12 @@ export class ParafeClient {
     if (payload.token_type !== 'consent') {
       throw new AuthError('Not a Parafe consent token', 'invalid_token');
     }
+    // S-69: a token issued for another agent is refused (a valid token from one
+    // session can't be replayed at a different target).
+    const expected = this.expectedTarget(consentToken, opts.agentId);
+    if (expected && payload.target_agent_id !== expected) {
+      throw new AuthError(`This consent token was issued for ${String(payload.target_agent_id)}, not ${expected}`, 'wrong_audience');
+    }
 
     const now = new Date();
     const expiresAt = payload.exp ? new Date(payload.exp * 1000).toISOString() : '';
@@ -933,12 +951,26 @@ export class ParafeClient {
       expired,
       initiatorAgentId: (payload.sub as string) ?? (payload.initiator_agent_id as string | undefined),
       audience: typeof payload.aud === 'string' ? payload.aud : undefined,
+      targetAgentId: typeof payload.target_agent_id === 'string' ? payload.target_agent_id : undefined,
       keyThumbprint: cnf?.jkt ?? null,
       initiatorProof: (payload.initiator_proof as 'pop' | 'credential') ?? null,
       tokenId: payload.jti,
       ...(payload.initiator_parties ? { initiatorParties: payload.initiator_parties as Parties } : {}),
       ...(payload.target_parties ? { targetParties: payload.target_parties as Parties } : {}),
     };
+  }
+
+  /**
+   * The agent a consent token must be for: `agentId` when given (null: no check),
+   * else the loaded agent unless it is the token's initiator (checking its own token).
+   */
+  private expectedTarget(consentToken: string, agentId: string | null | undefined): string | null {
+    if (agentId !== undefined) return agentId;
+    const loaded = this.credentials?.agentId;
+    if (!loaded) return null;
+    let sub: unknown;
+    try { sub = jose.decodeJwt(consentToken).sub; } catch { return null; }
+    return sub === loaded ? null : loaded;
   }
 
   /**
@@ -1407,7 +1439,10 @@ export class ParafeClient {
       method: 'POST',
     });
 
-    // If renewed, update in-memory credential to the new one
+    // If renewed, update in-memory credential to the new one, and the file it came
+    // from: the broker revoked the old credential, so a stale file locks the agent out.
+    let saved: boolean | undefined;
+    let saveError: string | undefined;
     if (raw.renewed && raw.credential && this.credentials?.agentId === agentId) {
       // Broker SPEC-002 decision 10: a self-registered agent's name became its
       // agent ID; the new credential says which name is current.
@@ -1424,9 +1459,20 @@ export class ParafeClient {
         issuedAt: raw.issued_at ?? this.credentials.issuedAt,
         expiresAt: raw.expires_at ?? this.credentials.expiresAt,
       };
+      if (this.credentialFile) {
+        try {
+          await encryptCredentials(this.credentialFile.path, this.credentials, this.credentialFile.passphrase);
+          saved = true;
+        } catch (err) {
+          saved = false;
+          saveError = (err as Error).message;
+        }
+      }
     }
 
     return {
+      ...(saved !== undefined ? { saved } : {}),
+      ...(saveError ? { saveError } : {}),
       agentId: raw.agent_id,
       renewed: raw.renewed,
       reason: raw.reason,
