@@ -1,5 +1,5 @@
 /**
- * AES-256-GCM credential file encryption/decryption for @parafe-trust/sdk
+ * AES-256-GCM credential file encryption/decryption for @getparafe/sdk
  *
  * File format (outer JSON):
  *   { version: 1, algorithm: 'aes-256-gcm', salt: '<base64 16-byte>',

@@ -1,5 +1,5 @@
 /**
- * TypeScript interfaces for @parafe-trust/sdk
+ * TypeScript interfaces for @getparafe/sdk
  */
 
 // ── Client configuration ──

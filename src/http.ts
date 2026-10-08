@@ -1,5 +1,5 @@
 /**
- * HTTP fetch wrapper with retry logic for @parafe-trust/sdk
+ * HTTP fetch wrapper with retry logic for @getparafe/sdk
  *
  * Retries on 502/503/504 responses and network errors with exponential backoff.
  * Does NOT retry 4xx or 500 responses.

@@ -1,5 +1,5 @@
 /**
- * Typed error classes for @parafe-trust/sdk
+ * Typed error classes for @getparafe/sdk
  * Each error maps to the broker's documented error codes.
  */
 

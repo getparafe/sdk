@@ -9,7 +9,7 @@ git clone https://github.com/getparafe/sdk.git
 cd sdk
 npm install
 npm run build
-npm test
+npm run test:unit
 ```
 
 ## Running Tests
@@ -20,7 +20,7 @@ Unit tests run without any external dependencies:
 npm run test:unit
 ```
 
-Integration tests require a running Parafe broker (no API key needed — tests bootstrap their own):
+Integration tests require a running Parafé broker (no API key needed — tests bootstrap their own). The broker isn't open source; CI runs this suite against staging for branches in this repository:
 
 ```bash
 npm run test:integration
@@ -34,7 +34,7 @@ PARAFE_TEST_BROKER_URL=http://localhost:3000 npm run test:integration
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/my-change`)
 3. Make your changes
-4. Run `npm run build && npm test` to verify
+4. Run `npm run build && npm run test:unit` to verify
 5. Commit and push
 6. Open a PR against `main`
 
@@ -43,7 +43,7 @@ All PRs must pass CI (build + tests) before merging.
 ## Code Style
 
 - TypeScript strict mode
-- No external dependencies beyond `jose` (Ed25519 crypto)
+- No runtime dependencies beyond `jose` (JWT/JWS, ES256 and EdDSA); keys and challenge signatures use `node:crypto`
 - All public methods must have JSDoc comments
 - New features need both unit and integration tests
 

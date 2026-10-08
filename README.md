@@ -8,7 +8,7 @@ Node.js client SDK for the [Parafe](https://platform.parafe.ai) Trust Broker —
 npm install @getparafe/sdk
 ```
 
-Requires Node.js 18+.
+Requires Node.js 18+ (CI tests Node 22). Load it with `import`: in 0.12.0 `require('@getparafe/sdk')` throws (the CommonJS build isn't marked as CommonJS; a fix is planned).
 
 ## Quickstart
 
@@ -45,7 +45,7 @@ await parafe.loadCredentials('./parafe-credentials.enc', 'your-passphrase');
 
 // 5. Check credential state
 const status = parafe.credentialStatus();
-// { loaded: true, agentId: 'prf_agent_...', expiresAt: '...', expired: false }
+// { loaded: true, agentId: 'prf_agent_...', agentName: '...', expiresAt: '...', expired: false }
 ```
 
 ### Trying the full flow on your own
@@ -59,11 +59,11 @@ await initiator.register({ name: 'my-initiator', type: 'personal', principalName
 await target.register({ name: 'my-target', type: 'personal', principalName: 'Me', scopePolicies: { /* ... */ } });
 ```
 
-Scope policies are enforced. The example above requires `minimum_verification_tier: 'email_verified'`, so a brand-new, unverified account will get `403 tier_insufficient` on `handshake()`. Verify your email in the [Developer Portal](https://platform.parafe.ai), or leave out `minimum_verification_tier` while you experiment.
+Scope policies are enforced. The example above requires `minimum_verification_tier: 'email_verified'`, so a brand-new, unverified account will get `403 tier_insufficient` on `handshake()`. Verify your email in the [Developer Portal](https://platform.parafe.ai), then call `renewCredential(agentId)` so the agent picks up the new tier (reason `tier_changed`), or leave out `minimum_verification_tier` while you experiment.
 
 A policy can also set floors on the initiator's reputation signals (0.6.0): `minimum_tenure_days`, `minimum_session_completion_rate` (0–1), `maximum_denied_requests_30d`, `minimum_unique_counterparties`, `minimum_handshake_success_rate` (0–1). A handshake below one is refused with its own code (`tenure_insufficient`, `completion_rate_insufficient`, `denied_requests_exceeded`, `counterparties_insufficient`, `handshake_success_rate_insufficient`) and `ForbiddenError.reputation` says which signal and by how much. Rates are 0 for an agent with no history.
 
-Agent names must be unique — pick your own rather than copying the examples.
+Agent names are unique per operator (per operator and user reference with `actsFor`), and a revoked agent's name is never reused: pick your own rather than copying the examples.
 
 ## Handshake Flow
 
@@ -104,6 +104,7 @@ const check = await parafe.verifyConsent({
   sessionId,
 });
 // { valid: true, permitted: true, action: 'read_bookings' }
+// An invalid, expired or revoked token, or a bad proof, throws AuthError: check `permitted` on return.
 
 // The agent that performs (or refuses) an action signs an action receipt and
 // files it with the broker, which indexes it for the session
@@ -134,7 +135,7 @@ const verification = await parafe.verifyReceipt(receipt);
 const offline = await parafe.verifyReceiptLocally(receipt);
 ```
 
-**Proof of possession.** Wherever the SDK authenticates as your agent with its credential (`handshake()`, `escalateScope()`, `recordActionReceipt()`, `fileActionReceipt()`, `getActionReceipts()`, `closeSession()`, `getReceipt()`, `revokeAgent()`, `updateScopePolicies()`), it also signs a `Parafe-PoP` proof with the agent's private key, bound to that request. A leaked credential is useless on its own. Nothing to do on your side.
+**Proof of possession.** Wherever the SDK authenticates as your agent with its credential (`handshake()`, `escalateScope()`, `recordActionReceipt()`, `fileActionReceipt()`, `getActionReceipts()`, `closeSession()`, `getReceipt()`, `revokeAgent()`, `updateScopePolicies()`), it also signs a `Parafe-PoP` proof with the agent's private key, bound to that request. On api.parafe.ai, which requires proofs, a leaked credential is useless on its own. Nothing to do on your side.
 
 **Key-bound consent tokens.** A consent token names the initiator (`sub`), the target (`aud`, its DID) and the initiator's key (`cnf.jkt`). When you present one to a target, attach a presentation proof so it can check you hold that key:
 
@@ -145,7 +146,7 @@ await target.verifyConsent({ consentToken: token, action: 'read_bookings', sessi
 // { valid: true, permitted: true, keyBound: true, proofVerified: true }
 ```
 
-**What the receipt contains:** both participants (agent ID, DID, assurance, tier), mutual authentication and a hash of the handshake `context`, every consent token issued in the session (a hash of the token, scope, permissions, **exclusions**, authorization modality, a hash of the human's instruction rather than its text, and how the initiator proved itself: `pop` or `credential`), every action receipt filed in the session (its hash, who signed it, the action, the result and error code) with the index's chain head, and the session times and who closed it. The broker learns action names, results and business references, never request or response content.
+**What the receipt contains:** both participants (agent ID, DID, assurance, tier), mutual authentication and a hash of the handshake `context`, every consent token issued in the session (a hash of the token, scope, permissions, **exclusions**, authorization modality, a hash of the human's instruction rather than its text, and how the initiator proved itself: `pop` or `credential`), every action receipt filed in the session (its hash, who signed it, the action, the result and error code) with the index's chain head, and the session times and who closed it. The broker learns action names, results and business references, never request or response content. It does receive the handshake `context` and an `attested` instruction's text, kept on the session record (the receipt carries only their hashes).
 
 **Action receipts (0.6.0).** `signActionReceipt()` signs a receipt with your agent's key (`typ: parafe-action-receipt+jwt`); `fileActionReceipt(sessionId, receipt)` files it (yours, the other agent's, or an AP2 Checkout/Payment Receipt with `{ kind: 'ap2.checkout_receipt' }`); `recordActionReceipt()` does both; `getActionReceipts(sessionId)` lists the session's index. File before the session is closed: a receipt filed after close is refused. Error codes: `not_permitted`, `excluded`, `consent_invalid`, `consent_expired`, `proof_invalid` (a consent check failed) and `failed` (you tried and it failed). `recordAction()` (`/interaction/record`) is deprecated; the broker answers 410 since 2026-09-30. If a language model decides which tools to call, tell it to attempt the tool and let your consent check refuse: a model that declines on its own leaves no refusal receipt.
 
@@ -188,10 +189,10 @@ Needs a broker with agent naming and the claim page (Parafé SPEC-002 decision 1
 
 Needs a broker with operator and principal (Parafé SPEC-002; api.parafe.ai since 2026-10-01). See [Operator and principal](#operator-and-principal-registering-for-your-users).
 
-- `register({ owner })` is now `register({ principalName })`: who the agent acts for, as free text. The broker refuses `owner`. New, optional: `actsFor: { ref }` registers the agent for one of your users (you become its operator).
+- `register({ owner })` is now `register({ principalName })`: who the agent acts for, as free text. The broker ignores `owner` (dropped silently). New, optional: `actsFor: { ref }` registers the agent for one of your users (you become its operator).
 - `getClaimStatus()`: `ownerTier` → `principalTier`, `ownerEmail` → `principalEmail`, `ownerEmailVerified` → `principalEmailVerified`. New: `operatorType`, `operatorId`, `principalType`, `principalRef`. `claimed` is false for an agent acting for a platform's user that no person has claimed.
 - `verifyMandate()`: the matched agent's `orgDomain` is now `operatorDomain` (the verified domain of the org that runs it).
-- Credentials: the claims `owner`, `owner_type`, `owner_id` are now `principal_name`, `principal_type`, `principal_id`, plus `principal_ref`, `operator_type`, `operator_id`; a person's user ID is never in a credential. Credentials issued before still say `owner` until they renew: call `getClaimStatus()` and renew when `credentialCurrent` is false.
+- Credentials: the claims `owner`, `owner_type`, `owner_id` are now `principal_name`, `principal_type`, `principal_id`, plus `principal_ref`, `operator_type`, `operator_id`; a person's user ID is never in the JWT credential (the SD-JWT VC carries it as a selectively disclosable `principal_id`). Credentials issued before still say `owner` until they renew: call `getClaimStatus()` and renew when `credentialCurrent` is false.
 - New, additive: `register()` returns `operatorType`, `operatorId`, `principalType`, `principalId`, `principalRef`; `completeHandshake()` and `verifyConsentLocally()` return `initiatorParties` / `targetParties`; receipts carry `participants.*.parties` (type `Parties`).
 
 ## Breaking in 0.8.0
@@ -277,7 +278,10 @@ await parafe.revokeAgent('prf_agent_...');
 // Renew the credential: re-issued when the principal's tier changed, when the
 // credential no longer shows the agent's principal or operator (e.g. after a claim), or it is
 // expired or within 7 days of expiry. Without an API key, the loaded agent renews itself
-// (credential + proof of possession).
+// (credential + proof of possession). Credentials last 30 days: a keyless agent must renew
+// before expiry, because an expired credential can't authenticate. After that, only its
+// operator's API key or the claiming person's portal session can renew it; an unclaimed
+// self-registered agent registers again.
 await parafe.renewCredential('prf_agent_...');
 
 // Update scope policies
@@ -288,17 +292,18 @@ await parafe.updateScopePolicies('prf_agent_...', {
 
 ## Operator and principal; registering for your users
 
-Every agent names an **operator** (who runs it and answers for it: the account whose API key registered it) and a **principal** (who it acts for). `register()` returns both (`operatorType`, `operatorId`, `principalType`, `principalId`, `principalRef`), and so does `getClaimStatus()`. Consent tokens and receipts name both parties too (`initiatorParties`/`targetParties` from `verifyConsentLocally()` and `completeHandshake()`, `participants.*.parties` on receipts); a person's user ID is never shown.
+An agent names an **operator** (who runs it and answers for it: the account whose API key registered it) and a **principal** (who it acts for). A self-registered agent has neither until someone claims it; then it has a principal and still no operator. A platform's agent (`actsFor`) keeps its operator when the person claims it. `register()` returns both (`operatorType`, `operatorId`, `principalType`, `principalId`, `principalRef`), and `getClaimStatus()` returns them without `principalId`. Consent tokens and receipts name both parties too (`initiatorParties`/`targetParties` from `verifyConsentLocally()` and `completeHandshake()`, `participants.*.parties` on receipts); they never show a person's user ID.
 
 A platform registers an agent for one of its users with `actsFor`:
 
 ```typescript
-const parafe = new ParafeClient({ apiKey: process.env.PARAFE_API_KEY });
+const parafe = new ParafeClient({ brokerUrl: 'https://api.parafe.ai', apiKey: process.env.PARAFE_API_KEY });
 const agent = await parafe.register({
   name: 'assistant-u42', type: 'personal', principalName: 'Platform user',
   actsFor: { ref: 'u42' }, // your opaque reference for the user
 });
-// agent.principalType === 'external', agent.operatorType === 'org', agent.verificationTier === 'unverified'
+// agent.principalType === 'external', agent.operatorType === 'org' (with an org API key; 'personal' with a personal one),
+// agent.verificationTier === 'unverified'
 ```
 
 - The `ref` is opaque: letters, digits, `.` `_` `:` `-`, up to 128. Not an email (the broker refuses `@`): counterparties see the ref in consent tokens and receipts.
@@ -307,7 +312,7 @@ const agent = await parafe.register({
 
 ## Self-registered agents and claim links
 
-An agent can register with no API key: a personal assistant running on a platform, say. It starts `self_registered` and `unverified`, with no operator or principal. To be trusted by services that require more, it asks the person it acts for to claim it. That person opens a link, signs in to the Parafé portal (or creates an account), and approves. No secret passes through the AI: the link only works for someone signed in who approves it.
+An agent can register with no API key: a personal assistant running on a platform, say. It starts `self_registered` and `unverified`, with no operator or principal. To be trusted by services that require more, it asks the person it acts for to claim it. That person opens a link, signs in to the Parafé portal (or creates an account), and approves. No secret passes through the AI. Approval needs a signed-in Parafé session, and until passkeys ship that is all it needs: software driving the person's signed-in browser could approve too (Parafé security finding S-63). The person is emailed on every claim and can revoke the agent from the portal. Read `claimed` as "a signed-in Parafé account approved this agent", not as proof of a fresh human step.
 
 ```typescript
 const parafe = new ParafeClient({ brokerUrl: 'https://api.parafe.ai' }); // no apiKey
@@ -355,13 +360,13 @@ if (!status.credentialCurrent || status.principalTier !== status.verificationTie
 - The person can revoke the agent from the portal like any of their agents.
 - **What the person sees.** The claim page shows the link's code first, then "Platform: Unknown (self-registered)" (Parafé only names a platform it authenticated), and whatever the agent sent at registration as "Calls itself" (`name`) and "Says it acts for" (`principalName`), unverified. The person can give the agent a private name of their own; only they see it.
 - **For an organization.** An owner or admin of an org can claim the agent for the org instead of for themselves. It then gets the org's verification tier and stays with the org if that person leaves it.
-- **Principal email (opt-in).** The claim page has a box "Share my email with the platform that runs this agent", off by default; the person can also turn it on or off later on the agent's page. Only while it's on, `getClaimStatus()` returns `principalEmail` and `principalEmailVerified`. It is never in the credential or the SD-JWT VC, which every counterparty sees.
+- **Principal email (opt-in).** The claim page has a box "Share my email with this agent" ("…with the platform that runs this agent" when a platform runs it), off by default; the person can also turn it on or off later on the agent's page. Only while it's on, `getClaimStatus()` returns `principalEmail` and `principalEmailVerified`. It is never in the credential or the SD-JWT VC, which every counterparty sees.
 - **Key fingerprint.** The claim page shows the agent's key fingerprint under "Details" (the link's code comes first). It is the RFC 7638 JWK thumbprint of the agent's public key: the 43-character base64url SHA-256 of the canonical JWK, shown in full, not grouped. It's the same value as a consent token's `cnf.jkt`. Show the identical string on your platform with `publicKeyThumbprint(agent.publicKey)`. Don't use the credential's `pub_key_thumbprint` claim: it's a different hash (hex SHA-256 of the base64 SPKI) and won't match.
 - **Public record.** The registry's list (`GET /registry/agents`) shows a self-registered agent once a person has claimed it. `GET https://api.parafe.ai/registry/agents/<agent_id>` (no auth) returns `registered_at`, `status`, `verification_tier`, `identity_assurance`, `operator_type` (and `operator_name` for an org) and `principal_type` for an active agent (never a person's name or ID) (listed or unlisted). A revoked or suspended agent returns a minimal record: `agent_id`, `did`, `status`, `registered_at` and `revoked_at` (null for agents revoked before the broker recorded the date). `parafe.ai/registry/<agent_id>` shows the same.
 
 ## Reputation Metrics
 
-Retrieve raw trust signals for any agent — useful for assessing trustworthiness before interacting, especially with self-registered agents.
+Retrieve raw trust signals for an agent — useful for assessing trustworthiness before interacting, especially with self-registered agents. Without an API key, any agent. With one, only your org's agents and agents with no org (403 for others; the public `GET /registry/agents/:id` returns `reputation_signals` for any active agent).
 
 ```typescript
 const metrics = await parafe.getAgentMetrics('prf_agent_...');
@@ -435,11 +440,17 @@ Keys are shown **once** at creation and stored as SHA-256 hashes — they cannot
 
 Since 2026-09-30 the broker signs with ES256 and publishes its keys at `/.well-known/jwks.json`; every token names its key (`kid`). `getJwks()` fetches them (cached), and `verifyConsentLocally()` uses them. Tokens and v1 receipts from before are Ed25519 and still verify (`getPublicKey()` returns that retired key).
 
-- **Credential:** a JWT, plus (`credentialSdJwt`) the same identity as an **SD-JWT VC** that binds the agent's key (`cnf.jwk`), with `principal_name`/`principal_id`/`principal_ref` selectively disclosable and `operator_domain` when the operator is a domain-verified org. A person's user ID is never in a credential.
+Offline checks (`verifyConsentLocally()`, `verifyReceiptLocally()`, `@getparafe/verify`) prove Parafé signed the artifact and it hasn't expired; they can't see revocation. Only the broker knows an agent was revoked: `verifyConsent()` (online) refuses its tokens at once. Consent tokens last 5 minutes, which bounds the gap.
+
+- **Credential:** a JWT, plus (`credentialSdJwt`) the same identity as an **SD-JWT VC** that binds the agent's key (`cnf.jwk`), with `principal_name`/`principal_id`/`principal_ref` selectively disclosable and `operator_domain` when the operator is a domain-verified org. A person's user ID is never in the JWT credential; in the SD-JWT VC it is the selectively disclosable `principal_id`, which registration returns disclosed: drop that disclosure before presenting the credential to anyone.
 - **Consent token (v2):** a JWT with `sub`, `aud`, `cnf.jkt`, `jti`, `exclusions` and `initiator_proof`.
 - **Receipt (v2):** a compact JWS (`typ: parafe-session-receipt+jwt`). v1 receipts (signed JSON) still verify: `getReceipt()` returns them as `{ formatVersion: 1, issued }`.
 
 The broker used to also return W3C-style `*_vdc` fields; they didn't verify with standard VC libraries and were removed on 2026-09-29.
+
+## Release notes
+
+The "New in" and "Breaking in" sections above cover 0.7.0 on; every version's notes are on [GitHub Releases](https://github.com/getparafe/sdk/releases).
 
 ## Running Tests
 
@@ -450,7 +461,8 @@ npm install
 # Unit tests only (no broker needed)
 npm run test:unit
 
-# Integration tests (requires a running broker — no API key needed)
+# Integration tests (requires a running Parafé broker — no API key needed; the broker
+# isn't open source, and CI runs this suite against staging)
 npm run test:integration
 
 # Or point at a specific broker URL
@@ -463,7 +475,7 @@ PARAFE_TEST_BROKER_URL=http://localhost:3000 npm run test:integration
 npm run build
 # Outputs:
 #   dist/esm/    — ES modules (Node ESM)
-#   dist/cjs/    — CommonJS
+#   dist/cjs/    — CommonJS (doesn't load in 0.12.0: use import)
 #   dist/types/  — TypeScript declarations
 ```
 

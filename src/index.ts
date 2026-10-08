@@ -1,11 +1,11 @@
 /**
- * @parafe-trust/sdk — Parafe Trust Broker Client SDK
+ * @getparafe/sdk — Parafé Trust Broker Client SDK
  *
  * Usage:
- *   import { ParafeClient } from '@parafe-trust/sdk';
+ *   import { ParafeClient } from '@getparafe/sdk';
  *
  *   const parafe = new ParafeClient({
- *     brokerUrl: 'https://parafe-production-9bc9.up.railway.app',
+ *     brokerUrl: 'https://api.parafe.ai',
  *     apiKey: 'prf_key_live_...',
  *   });
  */
