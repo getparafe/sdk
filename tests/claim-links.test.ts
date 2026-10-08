@@ -73,6 +73,20 @@ describe('claim links (Phase 1.5)', () => {
     expect(calls[0].headers.Authorization).toBeUndefined();
   });
 
+  it('register() proves it holds the key it registers (broker SPEC-003 part 4)', async () => {
+    respond = () => ({ status: 201, body: {
+      agent_id: 'prf_agent_new', agent_name: 'prf_agent_new', identity_assurance: 'self_registered', verification_tier: 'unverified',
+      credential: 'x.y.z', issued_at: 'now', expires_at: 'later', claim: CLAIM,
+    } });
+    const client = new ParafeClient({ brokerUrl: 'https://broker.test', apiKey: 'prf_key_live_test', retries: 0 });
+    await client.register({ type: 'personal', name: 'proof-agent' });
+    const pub = createPublicKey({ key: Buffer.from(calls[0].body!.public_key as string, 'base64'), format: 'der', type: 'spki' });
+    const { payload } = await jose.jwtVerify(calls[0].headers['Parafe-PoP'], pub, { typ: 'parafe-pop+jwt' });
+    expect(payload).toMatchObject({ htm: 'POST', htu: 'https://broker.test/agents/register' });
+    expect(typeof payload.jti).toBe('string');
+    expect(calls[0].headers.Authorization).toBe('Bearer prf_key_live_test');
+  });
+
   it('a keyless register() needs no name or principal (broker SPEC-002 decision 10)', async () => {
     respond = () => ({ status: 201, body: {
       agent_id: 'prf_agent_new', agent_name: 'prf_agent_new', principal_name: null, identity_assurance: 'self_registered', verification_tier: 'unverified',

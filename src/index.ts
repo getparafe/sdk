@@ -470,6 +470,14 @@ export class ParafeClient {
       claim?: { claim_url: string; code: string; expires_at: string };
     }>(`${this.brokerUrl}/agents/register`, {
       ...this.httpOpts,
+      // No automatic retry: a retry would resend the same single-use proof, and if
+      // the first attempt reached the broker the agent exists but this call fails.
+      retries: 0,
+      // Broker SPEC-003 part 4: prove we hold the key we're registering.
+      headers: {
+        ...this.httpOpts.headers,
+        'Parafe-PoP': await signProof(privateKey, { htm: 'POST', htu: `${this.brokerUrl}/agents/register` }),
+      },
       method: 'POST',
       body,
     });

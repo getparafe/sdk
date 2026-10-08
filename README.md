@@ -169,6 +169,11 @@ const escalated = await parafe.escalateScope({
 });
 ```
 
+## New in 0.13.0
+
+- `register()` proves it holds the key it registers: it signs a `Parafe-PoP` proof with the new key. The broker requires this since 2026-10-08 (SPEC-003 part 4), so **earlier versions can no longer register agents**; agents already registered are unaffected. Update before registering new agents.
+- `register()` makes a new key pair each time, so it always registers a new agent. It no longer retries on its own (a retry would resend the single-use proof); if it fails on a network error, call it again.
+
 ## New in 0.12.0
 
 - `waitForClaim()` waits for the person to approve the claim link and returns as soon as they do; `getClaimStatus({ waitSeconds })` asks the broker to wait (up to 60 seconds). Needs a broker from 2026-10-08 (api.parafe.ai and staging have it). See [Self-registered agents and claim links](#self-registered-agents-and-claim-links).
