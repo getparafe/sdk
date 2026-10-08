@@ -406,6 +406,7 @@ export class ParafeClient {
       return {
         ...this.httpOpts,
         headers: { Authorization: `Bearer ${creds.credential}`, ...(await this.proofHeader(method, url, claims)) },
+        refreshHeaders: () => this.proofHeader(method, url, claims),
       };
     }
     return this.httpOpts;
@@ -530,6 +531,7 @@ export class ParafeClient {
       timeout: this.timeout,
       retries: this.retries,
       headers: { Authorization: `Bearer ${creds.credential}`, ...(await this.proofHeader('POST', url, { agent_id: creds.agentId })) },
+      refreshHeaders: () => this.proofHeader('POST', url, { agent_id: creds.agentId }),
       method: 'POST',
     });
     return toClaimLink(raw);
@@ -563,6 +565,7 @@ export class ParafeClient {
       timeout: wait ? Math.max(this.timeout, (wait + 15) * 1000) : this.timeout,
       retries: this.retries,
       headers: { Authorization: `Bearer ${creds.credential}`, ...(await this.proofHeader('GET', url, { agent_id: creds.agentId })) },
+      refreshHeaders: () => this.proofHeader('GET', url, { agent_id: creds.agentId }),
       method: 'GET',
     });
     return {
@@ -692,6 +695,7 @@ export class ParafeClient {
     }>(url, {
       ...this.httpOpts,
       headers: { ...this.httpOpts.headers, ...(await this.proofHeader('POST', url, { target_agent_id: opts.targetAgentId, requested_scope: opts.scope })) },
+      refreshHeaders: () => this.proofHeader('POST', url, { target_agent_id: opts.targetAgentId, requested_scope: opts.scope }),
       method: 'POST',
       body,
     });
@@ -801,6 +805,7 @@ export class ParafeClient {
     }>(url, {
       ...this.httpOpts,
       headers: { ...this.httpOpts.headers, ...(await this.proofHeader('POST', url, { target_agent_id: opts.targetAgentId, requested_scope: opts.scope, session_id: opts.sessionId })) },
+      refreshHeaders: () => this.proofHeader('POST', url, { target_agent_id: opts.targetAgentId, requested_scope: opts.scope, session_id: opts.sessionId }),
       method: 'POST',
       body,
     });
@@ -1344,8 +1349,10 @@ export class ParafeClient {
     // credential matches this agent
     const url = `${this.brokerUrl}/agents/${agentId}/revoke`;
     let headers: Record<string, string>;
+    let refreshHeaders: (() => Promise<Record<string, string>>) | undefined;
     if (this.credentials?.agentId === agentId && this.credentials.credential) {
       headers = { Authorization: `Bearer ${this.credentials.credential}`, ...(await this.proofHeader('POST', url, { agent_id: agentId })) };
+      refreshHeaders = () => this.proofHeader('POST', url, { agent_id: agentId });
     } else {
       headers = { Authorization: `Bearer ${this.apiKey}` };
     }
@@ -1358,6 +1365,7 @@ export class ParafeClient {
       timeout: this.timeout,
       retries: this.retries,
       headers,
+      ...(refreshHeaders ? { refreshHeaders } : {}),
       method: 'POST',
     });
 
@@ -1449,6 +1457,7 @@ export class ParafeClient {
     }>(`${this.brokerUrl}/agents/${agentId}/scope-policies`, {
       ...this.httpOpts,
       headers: { ...this.httpOpts.headers, ...(await this.proofHeader('PUT', `${this.brokerUrl}/agents/${agentId}/scope-policies`, { agent_id: agentId })) },
+      refreshHeaders: () => this.proofHeader('PUT', `${this.brokerUrl}/agents/${agentId}/scope-policies`, { agent_id: agentId }),
       method: 'PUT',
       body: {
         credential: creds.credential,

@@ -8,7 +8,7 @@ Node.js client SDK for the [Parafe](https://platform.parafe.ai) Trust Broker —
 npm install @getparafe/sdk
 ```
 
-Requires Node.js 18+ (CI tests Node 22). Load it with `import`: in 0.12.0 `require('@getparafe/sdk')` throws (the CommonJS build isn't marked as CommonJS; a fix is planned).
+Requires Node.js 18+ (CI tests Node 22). Works with `import` and `require()` (in 0.12.0 and earlier, `require('@getparafe/sdk')` throws).
 
 ## Quickstart
 
@@ -173,6 +173,8 @@ const escalated = await parafe.escalateScope({
 
 - `register()` proves it holds the key it registers: it signs a `Parafe-PoP` proof with the new key. The broker requires this since 2026-10-08 (SPEC-003 part 4), so **earlier versions can no longer register agents**; agents already registered are unaffected. Update before registering new agents.
 - `register()` makes a new key pair each time, so it always registers a new agent. It no longer retries on its own (a retry would resend the single-use proof); if it fails on a network error, call it again.
+- `require('@getparafe/sdk')` works, and CommonJS TypeScript projects get types (0.12.0 threw, and TypeScript reported TS1479).
+- A retried request signs a new proof (a proof is single use, so a retry used to be refused as replayed). A request that changes something is retried only when the broker can't have received it (a 502 or 503, or a connection that never opened); after a timeout or a 504 it throws, because the broker may have done it already.
 
 ## New in 0.12.0
 
@@ -480,7 +482,7 @@ PARAFE_TEST_BROKER_URL=http://localhost:3000 npm run test:integration
 npm run build
 # Outputs:
 #   dist/esm/    — ES modules (Node ESM)
-#   dist/cjs/    — CommonJS (doesn't load in 0.12.0: use import)
+#   dist/cjs/    — CommonJS (marked with its own package.json)
 #   dist/types/  — TypeScript declarations
 ```
 

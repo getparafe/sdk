@@ -37,7 +37,7 @@
         "default": "./dist/esm/index.js"
       },
       "require": {
-        "types": "./dist/types/index.d.ts",
+        "types": "./dist/cjs/index.d.ts",
         "default": "./dist/cjs/index.js"
       }
     }
@@ -50,10 +50,10 @@
   "scripts": {
     "build": "npm run build:esm && npm run build:cjs && npm run build:types",
     "build:esm": "tsc -p tsconfig.esm.json",
-    "build:cjs": "tsc -p tsconfig.cjs.json",
+    "build:cjs": "tsc -p tsconfig.cjs.json && node scripts/mark-cjs.cjs",
     "build:types": "tsc -p tsconfig.types.json",
     "test": "node --experimental-vm-modules node_modules/.bin/jest",
-    "test:unit": "node --experimental-vm-modules node_modules/.bin/jest tests/crypto.test.ts tests/credentials.test.ts tests/agent-auth.test.ts tests/receipt-consent.test.ts tests/claim-links.test.ts tests/action-receipts.test.ts tests/operator-principal.test.ts",
+    "test:unit": "node --experimental-vm-modules node_modules/.bin/jest tests/crypto.test.ts tests/credentials.test.ts tests/agent-auth.test.ts tests/receipt-consent.test.ts tests/claim-links.test.ts tests/action-receipts.test.ts tests/operator-principal.test.ts tests/http-retry.test.ts",
     "test:integration": "node --experimental-vm-modules node_modules/.bin/jest tests/client.test.ts",
     "clean": "rm -rf dist/",
     "prepublishOnly": "npm run test:unit && npm run clean && npm run build"

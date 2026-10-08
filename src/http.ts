@@ -13,6 +13,11 @@ export interface RequestOptions {
   headers?: Record<string, string>;
   timeout: number;
   retries: number;
+  /**
+   * Headers to sign again before each retry: a `Parafe-PoP` proof is single use, so a
+   * retry of a request that reached the broker would be refused as replayed (P-49).
+   */
+  refreshHeaders?: () => Promise<Record<string, string>>;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -23,7 +28,9 @@ function sleep(ms: number): Promise<void> {
  * Perform an HTTP request against the broker with retry logic.
  *
  * On 502/503/504 or network error: retry up to `options.retries` times with
- * exponential backoff (200ms, 400ms, 800ms, ...).
+ * exponential backoff (200ms, 400ms, 800ms, ...), with fresh `refreshHeaders()`.
+ * A proof-carrying request that changes state is retried only on 502/503 or a
+ * connection that never opened (see `retryOnlyIfUnsent`).
  * On 500: throw immediately (server bug, unlikely to self-resolve).
  *
  * On 4xx: throw immediately with the appropriate typed error.
@@ -40,10 +47,16 @@ export async function request<T>(
 
   const maxAttempts = options.retries + 1;
   let lastError: Error | undefined;
+  // A request that changes state (not GET) and carries a single-use proof is retried only
+  // when the broker can't have processed it: a 502/503 from the edge, or a connection that
+  // never opened. After a timeout, a dropped connection or a 504 it may have run; retrying
+  // would run it twice (a second handshake, a mandate refused as already redeemed).
+  const retryOnlyIfUnsent = method !== 'GET' && options.refreshHeaders !== undefined;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     if (attempt > 0) {
       await sleep(200 * Math.pow(2, attempt - 1));
+      if (options.refreshHeaders) Object.assign(headers, await options.refreshHeaders());
     }
 
     let response: Response;
@@ -66,6 +79,9 @@ export async function request<T>(
       // Network error or timeout — retry
       const msg = err instanceof Error ? err.message : String(err);
       lastError = new NetworkError(msg);
+      const code = (err as { cause?: { code?: string } } | null)?.cause?.code;
+      const neverSent = code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'EAI_AGAIN';
+      if (retryOnlyIfUnsent && !neverSent) throw lastError;
       continue;
     }
 
@@ -89,6 +105,7 @@ export async function request<T>(
         // ignore JSON parse error
       }
       lastError = mapBrokerError(response.status, body);
+      if (retryOnlyIfUnsent && response.status === 504) throw lastError;
       continue;
     }
 

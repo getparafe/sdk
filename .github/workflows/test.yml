@@ -28,6 +28,11 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Both entry points load (import and require)
+        run: |
+          node --input-type=module -e "import { ParafeClient } from '@getparafe/sdk'; if (!ParafeClient) process.exit(1)"
+          node -e "if (!require('@getparafe/sdk').ParafeClient) process.exit(1)"
+
       - name: Run tests
         env:
           PARAFE_TEST_BROKER_URL: ${{ secrets.STAGING_BROKER_URL }}
