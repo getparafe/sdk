@@ -95,7 +95,7 @@ describe('operator and principal (SPEC-002)', () => {
     });
   });
 
-  it('getClaimStatus() returns principalEmail only when shared', async () => {
+  it('getClaimStatus() has no principal email (removed 2026-10-09), even from an older broker', async () => {
     respond = () => ({ status: 200, body: {
       claimed: true, operator_type: null, operator_id: null, principal_type: 'personal', principal_ref: null, identity_assurance: 'claimed',
       verification_tier: 'email_verified', principal_tier: 'email_verified', credential_current: true, registered_at: 'r',
@@ -103,8 +103,8 @@ describe('operator and principal (SPEC-002)', () => {
     } });
     const client = await clientWithCredentials();
     const s = await client.getClaimStatus();
-    expect(s.principalEmail).toBe('alex@example.com');
-    expect(s.principalEmailVerified).toBe(true);
+    expect(s).not.toHaveProperty('principalEmail');
+    expect(s).not.toHaveProperty('principalEmailVerified');
     expect(s).not.toHaveProperty('ownerEmail');
   });
 });

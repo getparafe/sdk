@@ -194,10 +194,6 @@ export interface ClaimStatus {
   credentialCurrent: boolean;
   /** When the agent registered (ISO 8601). */
   registeredAt: string;
-  /** The principal's email, only if they chose to share it with the operator (at the claim, or later in the portal). Never in the credential. */
-  principalEmail?: string;
-  /** Whether that email is verified (present with principalEmail). */
-  principalEmailVerified?: boolean;
 }
 
 // ── Credential status ──

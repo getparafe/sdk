@@ -560,8 +560,6 @@ export class ParafeClient {
       principal_tier: string | null;
       credential_current: boolean;
       registered_at: string;
-      principal_email?: string;
-      principal_email_verified?: boolean;
     }>(wait ? `${url}?wait=${wait}` : url, {
       // The broker holds a waiting request up to `wait` seconds: allow for it.
       timeout: wait ? Math.max(this.timeout, (wait + 15) * 1000) : this.timeout,
@@ -581,7 +579,6 @@ export class ParafeClient {
       principalTier: raw.principal_tier ?? null,
       credentialCurrent: raw.credential_current,
       registeredAt: raw.registered_at,
-      ...(raw.principal_email !== undefined ? { principalEmail: raw.principal_email, principalEmailVerified: Boolean(raw.principal_email_verified) } : {}),
     };
   }
 
