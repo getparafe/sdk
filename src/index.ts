@@ -904,12 +904,13 @@ export class ParafeClient {
 
   /**
    * Verify a consent token locally without a broker round-trip: the broker's
-   * signature (resolved by `kid` from the broker's JWKS; ES256 since 2026-09-30,
-   * EdDSA before), the issuer, expiry, scope and permissions.
+   * ES256 signature (resolved by `kid` from the broker's JWKS), the issuer,
+   * expiry, scope and permissions. A token signed with the retired Ed25519 key
+   * (before 2026-09-30) throws `AuthError` (`invalid_signature`): the broker
+   * stopped accepting them on 2026-10-09.
    *
    * `keys` is optional: the broker's JWKS from `getJwks()` (fetched and cached
-   * when omitted), or the legacy base64 Ed25519 key from `getPublicKey()` for
-   * tokens issued before 2026-09-30.
+   * when omitted). The legacy base64 Ed25519 key (a string) is no longer accepted.
    *
    * The token must be for `opts.agentId` (its target), by default the loaded
    * agent unless that agent is the token's initiator; `agentId: null` skips the
@@ -924,18 +925,16 @@ export class ParafeClient {
     keys?: BrokerJwks | string,
     opts: { agentId?: string | null } = {}
   ): Promise<VerifyConsentLocalResult> {
-    let key: jose.KeyLike | ReturnType<typeof jose.createLocalJWKSet>;
     if (typeof keys === 'string') {
-      // Legacy: the base64 SPKI Ed25519 key. Wrap in PEM headers directly; don't re-encode the DER.
-      if (jose.decodeProtectedHeader(consentToken).alg === 'ES256') {
-        throw new ValidationError('This token is ES256 (broker 2026-09-30+); the legacy Ed25519 key cannot verify it. Omit the key (the JWKS is fetched) or pass getJwks().', 'validation_error');
-      }
-      const pemLines: string[] = [];
-      for (let i = 0; i < keys.length; i += 64) pemLines.push(keys.slice(i, i + 64));
-      key = await jose.importSPKI(`-----BEGIN PUBLIC KEY-----\n${pemLines.join('\n')}\n-----END PUBLIC KEY-----`, 'EdDSA');
-    } else {
-      key = jose.createLocalJWKSet((keys ?? (await this.getJwks(await this.unknownKid(consentToken, keys)))) as unknown as jose.JSONWebKeySet);
+      throw new ValidationError('The retired Ed25519 key no longer verifies consent tokens (since 2026-10-09). Omit the key (the JWKS is fetched) or pass getJwks().', 'validation_error');
     }
+    // S-72: a token signed with the retired Ed25519 key is refused.
+    let alg: unknown;
+    try { alg = jose.decodeProtectedHeader(consentToken).alg; } catch { /* jose reports the malformed token below */ }
+    if (alg === 'EdDSA') {
+      throw new AuthError('This consent token is signed with the retired Ed25519 key, which Parafé no longer accepts', 'invalid_signature');
+    }
+    const key = jose.createLocalJWKSet((keys ?? (await this.getJwks(await this.unknownKid(consentToken, keys)))) as unknown as jose.JSONWebKeySet);
 
     // A bad signature or a foreign issuer throws AuthError (invalid_signature,
     // invalid_token). An expired token doesn't: jose checks the signature before
@@ -944,7 +943,7 @@ export class ParafeClient {
     let payload: jose.JWTPayload;
     try {
       ({ payload } = await jose.jwtVerify(consentToken, key as never, {
-        algorithms: ['ES256', 'EdDSA'],
+        algorithms: ['ES256'],
         issuer: 'parafe-trust-broker',
       }));
     } catch (err) {

@@ -1,8 +1,8 @@
 /**
  * Unit tests for SDK 0.4.0 (AP2 change request Phase 1). No network: fetch is stubbed.
  *
- * verifyConsentLocally(): broker keys from the JWKS by kid (ES256 since B10;
- * EdDSA tokens and the legacy key still verify), `exclusions` and `excluded`,
+ * verifyConsentLocally(): broker keys from the JWKS by kid (ES256 only: tokens
+ * signed with the retired Ed25519 key are refused since 2026-10-09), `exclusions` and `excluded`,
  * key binding (cnf.jkt) and initiator_proof (B7, B14).
  * Receipts (B3, B4, B5): the receipt is the JWS; the SDK decodes a view,
  * verifies by sending the JWS, and can verify offline against the JWKS.
@@ -44,12 +44,12 @@ describe('verifyConsentLocally()', () => {
     });
   });
 
-  it('still verifies a pre-B10 EdDSA token with no kid (via the JWKS or the legacy key), reading `excluded`', async () => {
+  it('refuses a token signed with the retired Ed25519 key (S-72), via the JWKS or the legacy key; still reads `excluded`', async () => {
     const token = await consentToken({ permissions: ['create_order'], excluded: ['issue_refund'] }, { legacy: true });
-    expect((await client.verifyConsentLocally(token, LEGACY_B64)).exclusions).toEqual(['issue_refund']);
-    const r = await client.verifyConsentLocally(token, { keys: [edJwk] } as never);
-    expect(r.keyThumbprint).toBeNull();
-    expect(r.initiatorProof).toBeNull();
+    await expect(client.verifyConsentLocally(token, { keys: [edJwk] } as never)).rejects.toMatchObject({ name: 'AuthError', code: 'invalid_signature' });
+    await expect(client.verifyConsentLocally(token, LEGACY_B64)).rejects.toMatchObject({ code: 'validation_error' });
+    const es = await consentToken({ permissions: ['create_order'], excluded: ['issue_refund'] });
+    expect((await client.verifyConsentLocally(es, JWKS)).exclusions).toEqual(['issue_refund']);
   });
 
   it('fetches and caches the JWKS when no keys are given', async () => {
@@ -67,7 +67,7 @@ describe('verifyConsentLocally()', () => {
     }
   });
 
-  it('falls back to the legacy /public-key on a broker without a JWKS', async () => {
+  it('a broker without a JWKS (before 2026-09-30) has only the retired key: its tokens are refused', async () => {
     const realFetch = globalThis.fetch;
     globalThis.fetch = jest.fn(async (url: unknown) => String(url).endsWith('/jwks.json')
       ? new Response(JSON.stringify({ error: 'not_found' }), { status: 404, headers: { 'Content-Type': 'application/json' } })
@@ -75,7 +75,8 @@ describe('verifyConsentLocally()', () => {
     try {
       const c = new ParafeClient({ brokerUrl: 'https://old-broker.test', retries: 0 });
       const token = await consentToken({ permissions: ['read'], excluded: ['x'] }, { legacy: true });
-      expect((await c.verifyConsentLocally(token)).exclusions).toEqual(['x']);
+      // Its tokens are Ed25519, which are refused now (S-72).
+      await expect(c.verifyConsentLocally(token)).rejects.toMatchObject({ code: 'invalid_signature' });
     } finally {
       globalThis.fetch = realFetch;
     }

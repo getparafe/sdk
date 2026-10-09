@@ -181,6 +181,7 @@ Fixes from Parafé's behaviour checks of 2026-10-08. Two changes in behaviour: a
 - `ValidationError` has `details` (each problem the broker found, e.g. in `register()`) and `unknownFields` (scope policy fields the broker doesn't know); when the broker sends only details, they are the message.
 - `getAgentMetrics()` reads only your own agents' track record (the broker restricted it to the owner on 2026-10-08); without an API key it signs the request with the loaded agent's key.
 - `verifyConsentLocally()` throws Parafé's `AuthError` for a token that doesn't check out, not the underlying library's error: code `invalid_signature` for a forged token (or one signed with a key the broker never published), `invalid_token` for a malformed one or another issuer. An expired token still returns `{ valid: false, expired: true }`.
+- `verifyConsentLocally()` refuses a consent token signed with the retired Ed25519 key (before 2026-09-30), as the broker does since 2026-10-09, and no longer takes that key as a string: verify with the JWKS (the default).
 - `evidenceSalt`: the session receipt's hash of an `attested` instruction (or an AP2 mandate) mixes in a random salt since 2026-10-09, so a short instruction can't be guessed from the receipt. The initiator gets the salt from `handshake()` (or `escalateScope()`'s `consentToken`), the target from `completeHandshake()`'s `consentToken`; keep it with the evidence to show what the hash covers.
 
 ## New in 0.13.0
@@ -460,7 +461,7 @@ Keys are shown **once** at creation and stored as SHA-256 hashes — they cannot
 
 ## Credential formats
 
-Since 2026-09-30 the broker signs with ES256 and publishes its keys at `/.well-known/jwks.json`; every token names its key (`kid`). `getJwks()` fetches them (cached), and `verifyConsentLocally()` uses them. Tokens and v1 receipts from before are Ed25519 and still verify (`getPublicKey()` returns that retired key).
+Since 2026-09-30 the broker signs with ES256 and publishes its keys at `/.well-known/jwks.json`; every token names its key (`kid`). `getJwks()` fetches them (cached), and `verifyConsentLocally()` uses them. v1 receipts from before still verify (`getPublicKey()` returns that retired Ed25519 key). Tokens it signed are refused since 2026-10-09: `verifyConsentLocally()` throws `AuthError` `invalid_signature` for one.
 
 Offline checks (`verifyConsentLocally()`, `verifyReceiptLocally()`, `@getparafe/verify`) prove Parafé signed the artifact and it hasn't expired; they can't see revocation. Only the broker knows an agent was revoked: `verifyConsent()` (online) refuses its tokens at once. Consent tokens last 5 minutes, which bounds the gap.
 
