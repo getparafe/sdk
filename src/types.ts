@@ -23,6 +23,7 @@ export interface AutonomousAuthorization {
 export interface AttestedAuthorization {
   modality: 'attested';
   evidence: {
+    /** What the person asked for, as a short summary, without personal details. In a new handshake the target agent receives this text. */
     instruction: string;
     platform: string;
     timestamp: string;
@@ -241,6 +242,12 @@ export interface HandshakeResult {
   handshakeId: string;
   challengeForTarget: string;
   expiresAt: string;
+  /**
+   * With authorization evidence (e.g. attested): the random salt in the session receipt's
+   * evidence hash; the target gets the same one with the consent token. Null without
+   * evidence, or from a broker before 2026-10-09.
+   */
+  evidenceSalt?: string | null;
 }
 
 // ── completeHandshake() ──
@@ -261,6 +268,14 @@ export interface ConsentTokenDetail {
   expiresAt: string;
   /** How the initiator proved itself: 'pop' (proof signed with its key) or 'credential'. */
   initiatorProof?: 'pop' | 'credential' | null;
+  /**
+   * The random salt in the session receipt's evidence hash (null without evidence, or
+   * from a broker before 2026-10-09). Keep it with the evidence: the hash is
+   * base64url(SHA-256(JCS({ evidence, salt }))), so together they show what the receipt covers.
+   * The target gets it here in a new handshake (the initiator from `handshake()`); the
+   * initiator gets it here in an escalation.
+   */
+  evidenceSalt?: string | null;
   /** The AP2 mandates behind 'delegated' / 'verified' (empty otherwise). */
   mandateRefs: MandateRef[];
 }
@@ -481,7 +496,7 @@ export interface ReceiptConsentToken {
   exclusions: string[];
   authorization: {
     modality: Authorization['modality'];
-    /** Hash of the evidence: the human's instruction, or the AP2 mandate (neither is on the receipt). */
+    /** Hash of the evidence: the human's instruction, or the AP2 mandate (neither is on the receipt). Salted since 2026-10-09 (`ConsentTokenDetail.evidenceSalt`). */
     evidenceHash: string | null;
     /** The AP2 mandates behind 'delegated' / 'verified' (broker B8). */
     mandateRefs: MandateRef[];

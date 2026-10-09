@@ -180,6 +180,7 @@ Fixes from Parafé's behaviour checks of 2026-10-08. One change in behaviour: a 
 - With an API key, `renewCredential()` of the loaded agent falls back to the agent's own credential and proof when the broker answers `agent_renews_itself` (an agent with no operator renews only itself).
 - `ValidationError` has `details` (each problem the broker found, e.g. in `register()`) and `unknownFields` (scope policy fields the broker doesn't know); when the broker sends only details, they are the message.
 - `getAgentMetrics()` reads only your own agents' track record (the broker restricted it to the owner on 2026-10-08); without an API key it signs the request with the loaded agent's key.
+- `evidenceSalt`: the session receipt's hash of an `attested` instruction (or an AP2 mandate) mixes in a random salt since 2026-10-09, so a short instruction can't be guessed from the receipt. The initiator gets the salt from `handshake()` (or `escalateScope()`'s `consentToken`), the target from `completeHandshake()`'s `consentToken`; keep it with the evidence to show what the hash covers.
 
 ## New in 0.13.0
 
@@ -230,7 +231,8 @@ Needs a broker with operator and principal (Parafé SPEC-002; api.parafe.ai sinc
 // Autonomous — agent acting alone
 ParafeClient.authorization.autonomous()
 
-// Attested — agent claims a human issued this instruction
+// Attested — agent claims a human issued this instruction. In a new handshake the
+// target agent receives the instruction: write a short summary, without personal details.
 ParafeClient.authorization.attested({
   instruction: 'User clicked "Rebook"',
   platform: 'acme-app',

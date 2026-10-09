@@ -443,11 +443,16 @@ describe('Full integration flow', () => {
       targetAgentId: tgtReg.agentId,
       scope: 'escalated-scope',
       permissions: ['read', 'write'],
+      authorization: ParafeClient.authorization.attested({ instruction: 'User asked to update the booking', platform: 'sdk-tests' }),
     });
 
     expect(escalated.sessionId).toBe(completed.sessionId);
     expect(escalated.consentToken.scope).toBe('escalated-scope');
     expect(escalated.consentToken.token).toBeTruthy();
+    // The receipt's evidence hash is salted; the salt comes with the token (none without evidence).
+    expect(escalated.consentToken.evidenceSalt).toMatch(/^[A-Za-z0-9_-]{22}$/);
+    expect(completed.consentToken.evidenceSalt).toBeNull();
+    expect(hs.evidenceSalt).toBeNull();
 
     // Close the session
     await iniClient.closeSession(completed.sessionId);

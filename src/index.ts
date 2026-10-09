@@ -697,6 +697,7 @@ export class ParafeClient {
       handshake_id: string;
       challenge_for_target: string;
       expires_at: string;
+      evidence_salt?: string;
     }>(url, {
       ...this.httpOpts,
       headers: { ...this.httpOpts.headers, ...(await this.proofHeader('POST', url, { target_agent_id: opts.targetAgentId, requested_scope: opts.scope })) },
@@ -709,6 +710,7 @@ export class ParafeClient {
       handshakeId: raw.handshake_id,
       challengeForTarget: raw.challenge_for_target,
       expiresAt: raw.expires_at,
+      evidenceSalt: raw.evidence_salt ?? null,
     };
   }
 
@@ -759,6 +761,7 @@ export class ParafeClient {
       issuedAt: ct.issued_at,
       expiresAt: ct.expires_at,
       initiatorProof: ct.initiator_proof ?? null,
+      evidenceSalt: (ct.authorization as { evidence_salt?: string } | undefined)?.evidence_salt ?? null,
       mandateRefs: mandateRefs((ct.authorization as { mandate_refs?: unknown } | undefined)?.mandate_refs),
     };
 
@@ -826,6 +829,7 @@ export class ParafeClient {
       issuedAt: ct.issued_at,
       expiresAt: ct.expires_at,
       initiatorProof: ct.initiator_proof ?? null,
+      evidenceSalt: (ct.authorization as { evidence_salt?: string } | undefined)?.evidence_salt ?? null,
       mandateRefs: mandateRefs((ct.authorization as { mandate_refs?: unknown } | undefined)?.mandate_refs),
     };
 
