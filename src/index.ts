@@ -355,6 +355,22 @@ function checkClaimWait(seconds: number): number {
   return seconds;
 }
 
+/**
+ * P-73: what verifyConsentLocally() throws for a token that doesn't check out:
+ * Parafé's AuthError, never jose's raw error. `invalid_signature` for a token
+ * not signed by the broker (a forgery, or a key it never published);
+ * `invalid_token` for anything else (malformed, another issuer, wrong algorithm).
+ */
+function consentTokenError(err: unknown): unknown {
+  if (err instanceof jose.errors.JWSSignatureVerificationFailed || err instanceof jose.errors.JWKSNoMatchingKey) {
+    return new AuthError('This consent token is not signed by the Parafé broker', 'invalid_signature');
+  }
+  if (err instanceof jose.errors.JOSEError) {
+    return new AuthError(`Not a valid Parafé consent token: ${err.message}`, 'invalid_token');
+  }
+  return err;
+}
+
 export class ParafeClient {
   private readonly brokerUrl: string;
   private readonly apiKey: string;
@@ -921,9 +937,10 @@ export class ParafeClient {
       key = jose.createLocalJWKSet((keys ?? (await this.getJwks(await this.unknownKid(consentToken, keys)))) as unknown as jose.JSONWebKeySet);
     }
 
-    // A bad signature or a foreign issuer throws. An expired token doesn't: jose
-    // checks the signature before the claims, so the payload on JWTExpired is
-    // authentic, and callers get { valid: false, expired: true } as documented.
+    // A bad signature or a foreign issuer throws AuthError (invalid_signature,
+    // invalid_token). An expired token doesn't: jose checks the signature before
+    // the claims, so the payload on JWTExpired is authentic, and callers get
+    // { valid: false, expired: true } as documented.
     let payload: jose.JWTPayload;
     try {
       ({ payload } = await jose.jwtVerify(consentToken, key as never, {
@@ -931,8 +948,11 @@ export class ParafeClient {
         issuer: 'parafe-trust-broker',
       }));
     } catch (err) {
-      if (!(err instanceof jose.errors.JWTExpired) || err.payload.iss !== 'parafe-trust-broker') throw err;
-      payload = err.payload;
+      if (err instanceof jose.errors.JWTExpired && err.payload.iss === 'parafe-trust-broker') {
+        payload = err.payload;
+      } else {
+        throw consentTokenError(err);
+      }
     }
     if (payload.token_type !== 'consent') {
       throw new AuthError('Not a Parafe consent token', 'invalid_token');

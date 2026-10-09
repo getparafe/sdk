@@ -180,6 +180,7 @@ Fixes from Parafé's behaviour checks of 2026-10-08. Two changes in behaviour: a
 - With an API key, `renewCredential()` of the loaded agent falls back to the agent's own credential and proof when the broker answers `agent_renews_itself` (an agent with no operator renews only itself).
 - `ValidationError` has `details` (each problem the broker found, e.g. in `register()`) and `unknownFields` (scope policy fields the broker doesn't know); when the broker sends only details, they are the message.
 - `getAgentMetrics()` reads only your own agents' track record (the broker restricted it to the owner on 2026-10-08); without an API key it signs the request with the loaded agent's key.
+- `verifyConsentLocally()` throws Parafé's `AuthError` for a token that doesn't check out, not the underlying library's error: code `invalid_signature` for a forged token (or one signed with a key the broker never published), `invalid_token` for a malformed one or another issuer. An expired token still returns `{ valid: false, expired: true }`.
 - `evidenceSalt`: the session receipt's hash of an `attested` instruction (or an AP2 mandate) mixes in a random salt since 2026-10-09, so a short instruction can't be guessed from the receipt. The initiator gets the salt from `handshake()` (or `escalateScope()`'s `consentToken`), the target from `completeHandshake()`'s `consentToken`; keep it with the evidence to show what the hash covers.
 
 ## New in 0.13.0

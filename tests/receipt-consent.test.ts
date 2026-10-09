@@ -11,7 +11,7 @@
 import { generateKeyPairSync, createPublicKey } from 'node:crypto';
 import { jest } from '@jest/globals';
 import * as jose from 'jose';
-import { ParafeClient, createPresentationProof, publicKeyThumbprint, decodeReceipt } from '../src/index.js';
+import { ParafeClient, AuthError, createPresentationProof, publicKeyThumbprint, decodeReceipt } from '../src/index.js';
 
 const ec = generateKeyPairSync('ec', { namedCurve: 'P-256' });
 const ed = generateKeyPairSync('ed25519');
@@ -119,10 +119,16 @@ describe('verifyConsentLocally()', () => {
 
   it('rejects a broker JWT that is not a consent token, a foreign issuer, and an unknown key', async () => {
     await expect(client.verifyConsentLocally(await consentToken({ token_type: undefined }), JWKS)).rejects.toThrow('Not a Parafe consent token');
-    await expect(client.verifyConsentLocally(await consentToken({}, { issuer: 'someone-else' }), JWKS)).rejects.toThrow();
+    await expect(client.verifyConsentLocally(await consentToken({}, { issuer: 'someone-else' }), JWKS)).rejects.toMatchObject({ name: 'AuthError', code: 'invalid_token' });
     const other = generateKeyPairSync('ec', { namedCurve: 'P-256' });
     const forged = await new jose.SignJWT({ token_type: 'consent' }).setProtectedHeader({ alg: 'ES256', kid: 'es-1' }).setIssuer('parafe-trust-broker').sign(other.privateKey);
-    await expect(client.verifyConsentLocally(forged, JWKS)).rejects.toThrow();
+    // P-73: Parafé's own error, not jose's.
+    const err = await client.verifyConsentLocally(forged, JWKS).catch((e) => e);
+    expect(err).toBeInstanceOf(AuthError);
+    expect(err.code).toBe('invalid_signature');
+    const tampered = (await consentToken({})).replace(/\.([^.]+)\./, (_m, p) => `.${Buffer.from(JSON.stringify({ ...JSON.parse(Buffer.from(p, 'base64url').toString()), scope: 'everything' })).toString('base64url')}.`);
+    await expect(client.verifyConsentLocally(tampered, JWKS)).rejects.toMatchObject({ code: 'invalid_signature' });
+    await expect(client.verifyConsentLocally('not.a.token', JWKS)).rejects.toMatchObject({ name: 'AuthError', code: 'invalid_token' });
   });
 });
 
