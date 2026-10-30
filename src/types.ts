@@ -611,6 +611,37 @@ export interface RevokeAgentResult {
 
 // ── renewCredential() ──
 
+export interface RotateKeyOptions {
+  /** The new key's algorithm. Default P-256 (AP2 receipts need it). */
+  keyAlgorithm?: 'Ed25519' | 'P-256';
+}
+
+/**
+ * Broker SPEC-006: the agent's key was replaced. The old key no longer signs
+ * anything valid; the new credential names the new key (`kid`).
+ */
+export interface RotateKeyResult {
+  agentId: string;
+  /** The new key as a DID URL (`<agent DID>#keys-N`): sign with this kid. */
+  kid: string;
+  keyVersion: number;
+  /** The retired key's DID URL. Receipts it signed count only with the broker's acknowledgment from before `retiredAt`. */
+  retiredKid: string;
+  retiredAt: string;
+  credential: string;
+  credentialSdJwt?: string;
+  /** The new key pair (SPKI / PKCS8 DER, base64). The private key is the only copy: save it. */
+  publicKey: string;
+  privateKey: string;
+  issuedAt: string;
+  expiresAt: string;
+  /** How many of the agent's sessions ended (their consent tokens were bound to the old key). */
+  sessionsEnded: number;
+  /** When the loaded agent was rotated: whether its credential file now holds the new key. Absent when there is no file. */
+  saved?: boolean;
+  saveError?: string;
+}
+
 export interface RenewCredentialResult {
   agentId: string;
   renewed: boolean;

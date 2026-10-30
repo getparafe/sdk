@@ -533,6 +533,21 @@ describe('Self-registered agents and claim links (Phase 1.5)', () => {
     await expect(keyless.getAgentMetrics(o.agentId)).rejects.toMatchObject({ statusCode: 401 });
   });
 
+  test('rotateKey() — the agent replaces its key; the new credential and key work, the DID document lists both (broker SPEC-006)', async () => {
+    const before = keyless.exportKeys();
+    const r = await keyless.rotateKey();
+    expect(r.keyVersion).toBe(2);
+    expect(r.kid).toMatch(/#keys-2$/);
+    expect(r.retiredKid).toMatch(/#keys-1$/);
+    expect(r.privateKey).not.toBe(before.privateKey);
+    // Signed with the new key and credential now:
+    const status = await keyless.getClaimStatus();
+    expect(status.claimed).toBe(false);
+    const doc = await (await fetch(`${BROKER_URL}/agents/${r.agentId}/did.json`)).json() as { verificationMethod: { id: string }[]; assertionMethod: string[] };
+    expect(doc.verificationMethod.map((m) => m.id)).toEqual([r.kid, r.retiredKid]);
+    expect(doc.assertionMethod).toEqual([r.kid]);
+  });
+
   test('a handshake refused for tier carries the claim link', async () => {
     const target = makeClient();
     const t = await target.register({

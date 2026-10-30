@@ -41,6 +41,8 @@ import type {
   VerifyReceiptResult,
   RevokeAgentResult,
   RenewCredentialResult,
+  RotateKeyOptions,
+  RotateKeyResult,
   UpdateScopePoliciesResult,
   AgentMetrics,
   VerifyConsentLocalResult,
@@ -1098,6 +1100,22 @@ export class ParafeClient {
   }
 
   /**
+   * The loaded agent's current key as a DID URL (broker SPEC-006): the
+   * credential's `kid` (`<DID>#keys-N`, N grows with each key rotation); a
+   * credential from before rotation existed has none, and its key is `#keys-1`.
+   */
+  private agentKid(did: string): string {
+    const creds = this.requireCredentials();
+    try {
+      const kid = jose.decodeJwt(creds.credential).kid;
+      if (typeof kid === 'string' && kid.startsWith(`${did}#keys-`)) return kid;
+    } catch {
+      // fall through
+    }
+    return `${did}#keys-1`;
+  }
+
+  /**
    * Sign an action receipt as the loaded agent: the agent that performs or
    * refuses an action signs what happened, bound to the consent token it was
    * asked under. Sign one for refusals too (`result: 'error'`, `error:
@@ -1110,7 +1128,8 @@ export class ParafeClient {
     if (result === 'error' && !opts.error) throw new ValidationError("An 'error' receipt needs error (e.g. 'excluded')", 'validation_error');
     if (result === 'success' && opts.error) throw new ValidationError("A 'success' receipt has no error", 'validation_error');
     const requestRef = opts.requestRef ?? (opts.request !== undefined ? sha256b64u(opts.request) : null);
-    return signActionReceiptJws(creds.privateKey, await this.agentDid(), {
+    const did = await this.agentDid();
+    return signActionReceiptJws(creds.privateKey, did, {
       session_id: opts.sessionId,
       consent_ref: sha256b64u(opts.consentToken),
       action: opts.action,
@@ -1121,7 +1140,7 @@ export class ParafeClient {
       details_hash: opts.detailsHash ?? (opts.details !== undefined ? jsonHash(opts.details) : null),
       business_ref: opts.businessRef ?? null,
       mandate_ref: opts.mandateRef ?? null,
-    });
+    }, this.agentKid(did));
   }
 
   /**
@@ -1256,7 +1275,7 @@ export class ParafeClient {
     const claims = ap2ReceiptClaims(opts, opts.iss ?? did, reference);
     let receipt: string;
     try {
-      receipt = await signAp2ReceiptJws(creds.privateKey, claims, `${did}#keys-1`);
+      receipt = await signAp2ReceiptJws(creds.privateKey, claims, this.agentKid(did));
     } catch (err) {
       throw new ValidationError((err as Error).message, 'validation_error');
     }
@@ -1523,6 +1542,96 @@ export class ParafeClient {
       issuedAt: raw.issued_at,
       expiresAt: raw.expires_at,
       message: raw.message,
+    };
+  }
+
+  /**
+   * Replace an agent's key (broker SPEC-006): generates a new key pair, proves
+   * it holds it, and the broker retires the old key at once (no overlap),
+   * issues a new credential naming the new key (`kid`), revokes the old one
+   * and ends the agent's sessions. The agent keeps its ID, claim and history.
+   *
+   * With an API key (scopes `agents:register` and `agents:revoke`), its manager
+   * rotates it: the path for a lost or stolen key, and the only one for an
+   * agent an organization registered. Without one, the loaded agent rotates
+   * itself with a proof from its current key.
+   *
+   * When the rotated agent is the loaded one, the new key and credential
+   * replace it in memory and in the file `saveCredentials()`/`loadCredentials()`
+   * last used. Otherwise save `privateKey` from the result: it is the only copy.
+   * Not retried: the proofs are single use, and a rotation that reached the
+   * broker can't be repeated with the same key.
+   */
+  async rotateKey(agentId?: string, opts: RotateKeyOptions = {}): Promise<RotateKeyResult> {
+    const id = agentId ?? this.requireCredentials().agentId;
+    const url = `${this.brokerUrl}/agents/${encodeURIComponent(id)}/rotate-key`;
+    const { publicKey, privateKey } = generateKeyPair(opts.keyAlgorithm ?? 'P-256');
+    if (!this.apiKey && this.requireCredentials().agentId !== id) {
+      throw new ValidationError('Rotating another agent needs an API key', 'validation_error');
+    }
+    const headers = this.apiKey
+      ? { ...this.httpOpts.headers }
+      : { Authorization: `Bearer ${this.requireCredentials().credential}`, ...(await this.proofHeader('POST', url, { agent_id: id })) };
+    const raw = await request<{
+      agent_id: string;
+      kid: string;
+      key_version: number;
+      retired_kid: string;
+      retired_at: string;
+      credential: string;
+      credential_sd_jwt?: string;
+      issued_at: string;
+      expires_at: string;
+      sessions_ended: number;
+    }>(url, {
+      ...this.httpOpts,
+      retries: 0,
+      headers,
+      method: 'POST',
+      body: {
+        new_public_key: publicKey,
+        new_key_proof: await signProof(privateKey, { htm: 'POST', htu: url, agent_id: id }),
+      },
+    });
+
+    let saved: boolean | undefined;
+    let saveError: string | undefined;
+    if (this.credentials?.agentId === id) {
+      this.credentials = {
+        ...this.credentials,
+        credential: raw.credential,
+        credentialSdJwt: raw.credential_sd_jwt ?? this.credentials.credentialSdJwt,
+        publicKey,
+        privateKey,
+        issuedAt: raw.issued_at,
+        expiresAt: raw.expires_at,
+      };
+      if (this.credentialFile && this.credentialFile.agentId === id) {
+        try {
+          await encryptCredentials(this.credentialFile.path, this.credentials, this.credentialFile.passphrase);
+          saved = true;
+        } catch (err) {
+          saved = false;
+          saveError = (err as Error).message;
+        }
+      }
+    }
+
+    return {
+      ...(saved !== undefined ? { saved } : {}),
+      ...(saveError ? { saveError } : {}),
+      agentId: raw.agent_id,
+      kid: raw.kid,
+      keyVersion: raw.key_version,
+      retiredKid: raw.retired_kid,
+      retiredAt: raw.retired_at,
+      credential: raw.credential,
+      ...(raw.credential_sd_jwt ? { credentialSdJwt: raw.credential_sd_jwt } : {}),
+      publicKey,
+      privateKey,
+      issuedAt: raw.issued_at,
+      expiresAt: raw.expires_at,
+      sessionsEnded: raw.sessions_ended,
     };
   }
 

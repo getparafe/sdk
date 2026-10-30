@@ -170,6 +170,16 @@ const escalated = await parafe.escalateScope({
 });
 ```
 
+## New in 0.15.0
+
+Key rotation (Parafé SPEC-006; api.parafe.ai since 2026-10-30). Nothing breaks. **Update before any of your agents rotates:** earlier versions sign action receipts and AP2 receipts as key 1, which stops counting once the agent has a new key.
+
+- `rotateKey(agentId?, { keyAlgorithm })` replaces an agent's key. The SDK makes the new key pair and proves it holds it. The old key stops working at once. The broker issues a new credential naming the new key, revokes the old one, and ends the agent's sessions (their consent tokens were bound to the old key). The agent keeps its ID, claim and history.
+  - Without an API key, the loaded agent rotates itself (its credential and a proof from its current key). An agent an organization registered can't: the broker answers `org_must_rotate`.
+  - With an API key (scopes `agents:register` and `agents:revoke`), you rotate an agent you manage. This is the path for a lost or stolen key.
+  - When the loaded agent is rotated, the new key and credential replace it in memory and in the file `saveCredentials()`/`loadCredentials()` last used (`saved`). For another agent, save `privateKey` from the result: it is the only copy.
+- Action receipts and AP2 receipts are signed with the key the credential names (`kid`, `<agent DID>#keys-N`), not always `#keys-1`.
+
 ## New in 0.14.0
 
 Fixes from Parafé's behaviour checks of 2026-10-08. Two changes in behaviour: a consent token issued for another agent than the loaded one now throws `AuthError` (`wrong_audience`); pass `agentId: null` to check without it. And `ClaimStatus` no longer has `principalEmail` or `principalEmailVerified`: the broker stopped sharing a person's email on 2026-10-09.

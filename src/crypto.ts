@@ -139,17 +139,19 @@ export const ACTION_RECEIPT_TYP = 'parafe-action-receipt+jwt';
 
 /**
  * Sign an action receipt (AP2 change request B6) with the agent's key: a
- * compact JWS, typ `parafe-action-receipt+jwt`, kid `<agent DID>#keys-1`.
+ * compact JWS, typ `parafe-action-receipt+jwt`, kid the agent's current key
+ * (the credential's `kid`, `<agent DID>#keys-N`; `#keys-1` when not given).
  * `claims` are the receipt's claims other than iss, iat, jti and ver.
  */
 export async function signActionReceipt(
   privateKeyBase64: string,
   agentDid: string,
-  claims: Record<string, unknown>
+  claims: Record<string, unknown>,
+  kid: string = `${agentDid}#keys-1`
 ): Promise<string> {
   const privateKey = loadPrivateKey(privateKeyBase64);
   return new jose.SignJWT({ ver: 1, ...claims })
-    .setProtectedHeader({ alg: keyAlg(privateKey), kid: `${agentDid}#keys-1`, typ: ACTION_RECEIPT_TYP })
+    .setProtectedHeader({ alg: keyAlg(privateKey), kid, typ: ACTION_RECEIPT_TYP })
     .setIssuer(agentDid)
     .setIssuedAt()
     .setJti(nodeCrypto.randomUUID())

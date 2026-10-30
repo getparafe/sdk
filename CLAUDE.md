@@ -10,7 +10,7 @@ Official Node.js/TypeScript SDK for the Parafe Trust Broker. Published on npm as
 - `src/credentials.ts` — Credential encryption at rest via AES-256-GCM. Save/load from disk.
 - `src/errors.ts` — Error class hierarchy (`ParafeError` → `AuthError`, `ForbiddenError`, `NotFoundError`, etc.).
 - `src/types.ts` — TypeScript type definitions for all broker API types.
-- `tests/` — Jest. `client.test.ts` is the integration suite (needs a running broker, `PARAFE_TEST_BROKER_URL`); the rest are unit tests (`npm run test:unit` runs nine of them; `ap2-mandates.test.ts`, which stubs fetch, runs only with `npm test`).
+- `tests/` — Jest. `client.test.ts` is the integration suite (needs a running broker, `PARAFE_TEST_BROKER_URL`); the rest are unit tests (`npm run test:unit` runs ten of them; `ap2-mandates.test.ts`, which stubs fetch, runs only with `npm test`).
 
 ## Running
 
@@ -30,7 +30,8 @@ npm test               # All Jest tests, including the integration suite (needs 
 - **Broker keys** — `verifyConsentLocally` and `verifyReceiptLocally` resolve broker keys from the JWKS (`getJwks()`, cached 5 min, falls back to `/public-key` on a pre-2026-09-30 broker). Consent tokens verify ES256 only: one signed with the retired Ed25519 key throws `AuthError` `invalid_signature`, and the legacy base64 key (a string) is refused (broker S-72, 2026-10-09).
 - **Proof of possession (0.4.0)** — every call that authenticates with the agent's credential also sends a `Parafe-PoP` header signed with its key (`proofHeader`/`agentHttpOpts`). Keep this for any new credential-authenticated method.
 - **Receipts are JWS (0.4.0)** — `SessionReceipt.receipt` is the evidence; the rest is decoded from it. Never rebuild or re-serialize a receipt.
-- **Action receipts (0.6.0)** — `signActionReceipt` signs with the agent key (`kid` = `<agent DID>#keys-1`; the DID comes from the SD-JWT credential, else the agent's DID document); `fileActionReceipt` treats a 409 `duplicate_receipt` as success (`duplicate: true`, the original acknowledgment). `recordAction` (`/interaction/record`) always fails: the broker answers 410 since 2026-09-30.
+- **Action receipts (0.6.0)** — `signActionReceipt` signs with the agent key (`kid` = the credential's, `<agent DID>#keys-N`; the DID comes from the SD-JWT credential, else the agent's DID document); `fileActionReceipt` treats a 409 `duplicate_receipt` as success (`duplicate: true`, the original acknowledgment). `recordAction` (`/interaction/record`) always fails: the broker answers 410 since 2026-09-30.
+- **Key rotation (0.15.0)** — `rotateKey()` (broker SPEC-006): the agent itself (credential + PoP from the current key) or, with an API key, its manager; the body carries `new_public_key` and `new_key_proof` (a PoP signed by the new key, claims htm, htu, agent_id). Not retried. A rotated loaded agent's key and credential are replaced in memory and in its credential file. Receipts are signed with the credential's `kid` (`agentKid()`), `#keys-1` for a credential that has none.
 - **Retry logic** — `http.ts` retries on 502/503/504 and network errors or timeouts with exponential backoff (200ms * 2^attempt). 4xx and 500 fail immediately. A `Parafe-PoP` is single use, so every request that carries one also passes `refreshHeaders` and each retry is signed again (P-49); keep that for new credential-authenticated methods. Such a request that changes state (not GET) is retried only after a 502/503 or a connection that never opened: after a timeout, a dropped connection or a 504 the broker may have run it.
 
 ## When Making Changes
